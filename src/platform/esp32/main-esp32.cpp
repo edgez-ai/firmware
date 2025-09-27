@@ -616,11 +616,11 @@ extern "C" {
 
                     const int wakeup_time_sec = 20;
                     printf("Enabling timer wakeup, %ds\n", wakeup_time_sec);
-                    ESP_ERROR_CHECK(esp_sleep_enable_timer_wakeup(wakeup_time_sec * 1000000));
+                    //ESP_ERROR_CHECK(esp_sleep_enable_timer_wakeup(wakeup_time_sec * 1000000));
 
-                    printf("Entering deep sleep\n");
-                    gettimeofday(&sleep_enter_time, NULL);
-                    esp_deep_sleep_start();
+                    //printf("Entering deep sleep\n");
+                    //gettimeofday(&sleep_enter_time, NULL);
+                    //esp_deep_sleep_start();
 
                     inactivity_counter = 0; // reset after waking up
                 } else {
