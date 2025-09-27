@@ -33,6 +33,8 @@ static void WiFiEvent(WiFiEvent_t event);
 #endif
 
 using namespace concurrency;
+// LwM2M client task declaration
+void startLwM2MClient();
 
 // NTP
 WiFiUDP ntpUDP;
@@ -355,6 +357,9 @@ static void WiFiEvent(WiFiEvent_t event)
         LOG_INFO("Connected to access point");
 #ifdef WIFI_LED
         digitalWrite(WIFI_LED, HIGH);
+#endif
+#ifdef ARCH_ESP32
+    startLwM2MClient();
 #endif
         break;
     case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
