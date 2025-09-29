@@ -211,6 +211,7 @@ NullSensor tsl2561Sensor;
 
 #include "graphics/ScreenFonts.h"
 #include <Throttle.h>
+#include "BluetoothCommon.h" // for SensorAdvData & packAndAdvertiseSensorData
 
 int32_t EnvironmentTelemetryModule::runOnce()
 {
@@ -776,21 +777,51 @@ bool EnvironmentTelemetryModule::sendTelemetry(NodeNum dest, bool phoneOnly)
             service->sendToPhone(p);
         } else {
             LOG_INFO("Send packet to mesh");
-            service->sendToMesh(p, RX_SRC_LOCAL, true);
+            // Broadcast via BLE advertisement when in SENSOR role (connectionless discovery of key readings)
+            if (config.device.role == meshtastic_Config_DeviceConfig_Role_SENSOR) {
+                SensorAdvData adv{};
+                const auto &em = m.variant.environment_metrics;
+                if (em.has_temperature) {
+                    adv.hasTemperature = true;
+                    adv.temperatureC = em.temperature;
+                }
+                if (em.has_relative_humidity) {
+                    adv.hasHumidity = true;
+                    adv.humidityPercent = em.relative_humidity;
+                }
+                if (em.has_barometric_pressure) {
+                    adv.hasPressure = true;
+                    // Packet uses kPa or hPa? Assume hPa stored directly as barometric_pressure (common in code).
+                    adv.pressureHpa = em.barometric_pressure; // If units differ adjust here.
+                }
+                if (powerStatus && powerStatus->getHasBattery()) {
+                    adv.hasBattery = true;
+                    adv.batteryPercent = powerStatus->getBatteryChargePercent();
+                }
+                // Only attempt if at least one field present
+                if (adv.hasTemperature || adv.hasHumidity || adv.hasPressure || adv.hasBattery) {
+                    packAndAdvertiseSensorData(adv);
+                }
 
-            if (config.device.role == meshtastic_Config_DeviceConfig_Role_SENSOR && config.power.is_power_saving) {
-                meshtastic_ClientNotification *notification = clientNotificationPool.allocZeroed();
-                notification->level = meshtastic_LogRecord_Level_INFO;
-                notification->time = getValidTime(RTCQualityFromNet);
-                sprintf(notification->message, "Sending telemetry and sleeping for %us interval in a moment",
-                        Default::getConfiguredOrDefaultMs(moduleConfig.telemetry.environment_update_interval,
-                                                          default_telemetry_broadcast_interval_secs) /
-                            1000U);
-                service->sendClientNotification(notification);
                 sleepOnNextExecution = true;
-                LOG_DEBUG("Start next execution in 5s, then sleep");
-                setIntervalFromNow(FIVE_SECONDS_MS);
+                LOG_DEBUG("Start next execution in 500ms, then sleep");
+                setIntervalFromNow(500);
             }
+            //service->sendToMesh(p, RX_SRC_LOCAL, true);
+
+            //if (config.device.role == meshtastic_Config_DeviceConfig_Role_SENSOR && config.power.is_power_saving) {
+            //    meshtastic_ClientNotification *notification = clientNotificationPool.allocZeroed();
+            //    notification->level = meshtastic_LogRecord_Level_INFO;
+            //    notification->time = getValidTime(RTCQualityFromNet);
+            //    sprintf(notification->message, "Sending telemetry and sleeping for %us interval in a moment",
+            //            Default::getConfiguredOrDefaultMs(moduleConfig.telemetry.environment_update_interval,
+            //                                              default_telemetry_broadcast_interval_secs) /
+            //                1000U);
+            //    service->sendClientNotification(notification);
+            //    sleepOnNextExecution = true;
+            //    LOG_DEBUG("Start next execution in 5s, then sleep");
+            //    setIntervalFromNow(FIVE_SECONDS_MS);
+            //}
         }
         return true;
     }

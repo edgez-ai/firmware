@@ -301,6 +301,26 @@ void NRF52Bluetooth::resumeAdvertising()
     Bluefruit.Advertising.setFastTimeout(30);   // number of seconds in fast mode
     Bluefruit.Advertising.start(0);
 }
+// Platform hook for sensor advertisement updates
+void platformUpdateSensorAdv(const uint8_t *payload, size_t len)
+{
+    if (len > 22) len = 22;
+    uint8_t m[24];
+    m[0] = SENSOR_ADV_MANUFACTURER_ID & 0xFF;
+    m[1] = (SENSOR_ADV_MANUFACTURER_ID >> 8) & 0xFF;
+    memcpy(&m[2], payload, len);
+    Bluefruit.Advertising.stop();
+    Bluefruit.Advertising.clearData();
+    Bluefruit.ScanResponse.clearData();
+    Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
+    Bluefruit.Advertising.addService(meshBleService);
+    Bluefruit.Advertising.addManufacturerData(m, len + 2);
+    Bluefruit.ScanResponse.addName();
+    Bluefruit.Advertising.restartOnDisconnect(true);
+    Bluefruit.Advertising.setInterval(32, 244);
+    Bluefruit.Advertising.setFastTimeout(30);
+    Bluefruit.Advertising.start(0);
+}
 /// Given a level between 0-100, update the BLE attribute
 void updateBatteryLevel(uint8_t level)
 {

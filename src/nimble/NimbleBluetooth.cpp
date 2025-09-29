@@ -432,6 +432,59 @@ void NimbleBluetooth::startAdvertising()
 #endif
 }
 
+// Update sensor advertisement payload (manufacturer or service data). Keep short to fit alongside existing fields.
+void platformUpdateSensorAdv(const uint8_t *payload, size_t len)
+{
+#ifdef NIMBLE_TWO
+    NimBLEExtAdvertising *adv = NimBLEDevice::getAdvertising();
+    if (!adv) return;
+    if (len > 22) len = 22; // safety cap
+    NimBLEExtAdvertisement legacyAdvertising;
+    legacyAdvertising.setLegacyAdvertising(true);
+    legacyAdvertising.setScannable(true);
+    legacyAdvertising.setConnectable(true);
+    legacyAdvertising.setFlags(BLE_HS_ADV_F_DISC_GEN);
+    // Always advertise mesh + battery service UUIDs
+    if (powerStatus->getHasBattery() == 1) {
+        legacyAdvertising.setCompleteServices(NimBLEUUID((uint16_t)0x180f));
+    }
+    legacyAdvertising.setCompleteServices(NimBLEUUID(MESH_SERVICE_UUID));
+    // Encode as manufacturer data (Company ID + payload)
+    uint8_t m[24];
+    if (len > 22) len = 22;
+    m[0] = SENSOR_ADV_MANUFACTURER_ID & 0xFF;
+    m[1] = (SENSOR_ADV_MANUFACTURER_ID >> 8) & 0xFF;
+    memcpy(&m[2], payload, len);
+    legacyAdvertising.setManufacturerData(m, len + 2);
+    legacyAdvertising.setMinInterval(500);
+    legacyAdvertising.setMaxInterval(1000);
+
+    NimBLEExtAdvertisement scanResp;
+    scanResp.setLegacyAdvertising(true);
+    scanResp.setConnectable(true);
+    scanResp.setName(getDeviceName());
+
+    adv->stop();
+    if (!adv->setInstanceData(0, legacyAdvertising)) return;
+    if (!adv->setScanResponseData(0, scanResp)) return;
+    adv->start(0, 0, 0);
+#else
+    NimBLEAdvertising *p = NimBLEDevice::getAdvertising();
+    if (!p) return;
+    if (len > 22) len = 22;
+    uint8_t m[24];
+    m[0] = SENSOR_ADV_MANUFACTURER_ID & 0xFF;
+    m[1] = (SENSOR_ADV_MANUFACTURER_ID >> 8) & 0xFF;
+    memcpy(&m[2], payload, len);
+    p->stop();
+    p->reset();
+    p->addServiceUUID(MESH_SERVICE_UUID);
+    p->addServiceUUID(NimBLEUUID((uint16_t)0x180f));
+    p->setManufacturerData(std::string((char *)m, len + 2));
+    p->start(0);
+#endif
+}
+
 /// Given a level between 0-100, update the BLE attribute
 void updateBatteryLevel(uint8_t level)
 {

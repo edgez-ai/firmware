@@ -14,12 +14,39 @@
 #define LEGACY_LOGRADIO_UUID "6c6fd238-78fa-436b-aacf-15c5be1ef2e2"
 #define LOGRADIO_UUID "5a3d6e49-06e6-4423-9944-e9de8cdf9547"
 
+// Company / Manufacturer ID used for manufacturer specific advertisement payload when broadcasting sensor data.
+// 0xFFFF is a reserved/test value; replace with an assigned Bluetooth SIG Company Identifier for production.
+#ifndef SENSOR_ADV_MANUFACTURER_ID
+#define SENSOR_ADV_MANUFACTURER_ID 0xFFFF
+#endif
+
 // NRF52 wants these constants as byte arrays
 // Generated here https://yupana-engineering.com/online-uuid-to-c-array-converter - but in REVERSE BYTE ORDER
 extern const uint8_t MESH_SERVICE_UUID_16[], TORADIO_UUID_16[16u], FROMRADIO_UUID_16[], FROMNUM_UUID_16[], LOGRADIO_UUID_16[];
 
 /// Given a level between 0-100, update the BLE attribute
 void updateBatteryLevel(uint8_t level);
+
+// Lightweight struct describing optional sensor values for advertisement broadcast.
+struct SensorAdvData {
+  bool hasTemperature = false; // temperatureC valid
+  bool hasHumidity = false;    // humidityPercent valid
+  bool hasPressure = false;    // pressureHpa valid
+  bool hasBattery = false;     // batteryPercent valid
+  float temperatureC = 0.0f;   // Signed deg C
+  float humidityPercent = 0.0f; // 0-100
+  float pressureHpa = 0.0f;    // hPa
+  uint8_t batteryPercent = 0;  // 0-100
+  uint8_t extraFlags = 0;      // user flags (upper bits in first byte)
+};
+
+// Pack values into a compact manufacturer data blob and refresh advertising.
+// Returns length of payload placed into advertisement (0 if suppressed or bluetooth disabled).
+// If force==true, bypasses interval + unchanged suppression.
+int packAndAdvertiseSensorData(const SensorAdvData &data, bool force = false);
+
+// Platform-specific hook implemented per BT stack to rebuild advertising with new payload.
+void platformUpdateSensorAdv(const uint8_t *payload, size_t len);
 
 class BluetoothApi
 {
