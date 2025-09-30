@@ -1909,12 +1909,20 @@ meshtastic_NodeInfoLite *NodeDB::getOrCreateMeshNode(NodeNum n)
                 (numMeshNodes)--;
             }
         }
+        uint16_t instanceId = 0;
+        if (numMeshNodes > 0) {
+            // Increment instanceId with explicit wrap to 0 after UINT16_MAX to avoid implicit rollover ambiguity
+            uint16_t prevInstanceId = meshNodes->at(numMeshNodes - 1).instanceId;
+            instanceId = (prevInstanceId == UINT16_MAX) ? 0 : static_cast<uint16_t>(prevInstanceId + 1);
+        }
         // add the node at the end
         lite = &meshNodes->at((numMeshNodes)++);
 
         // everything is missing except the nodenum
         memset(lite, 0, sizeof(*lite));
         lite->num = n;
+        // set instanceId to be last node instanceId + 1
+        lite->instanceId = instanceId;
         LOG_INFO("Adding node to database with %i nodes and %u bytes free!", numMeshNodes, memGet.getFreeHeap());
     }
 
