@@ -432,11 +432,11 @@ static void lwm2m_client_task(void *pvParameters)
     
     while (1) {
         client->step();
-        lwm2m_object_t * securityObj = client_data.securityObjP;
-        char uri_buf[128] = {0};
-        char *uri = security_get_uri(client_handle, securityObj, 1, uri_buf, sizeof(uri_buf));
-        ESP_LOGI(LWM2MClient::LWM2M_TAG, "Security Object URI: %s", uri ? uri : "NULL");
-        vTaskDelay(300 / portTICK_PERIOD_MS);
+        //lwm2m_object_t * securityObj = client_data.securityObjP;
+        //char uri_buf[128] = {0};
+        //char *uri = security_get_uri(client_handle, securityObj, 1, uri_buf, sizeof(uri_buf));
+        //ESP_LOGI(LWM2MClient::LWM2M_TAG, "Security Object URI: %s", uri ? uri : "NULL");
+        vTaskDelay(10 / portTICK_PERIOD_MS);
     }
 
     vTaskDelete(NULL);
