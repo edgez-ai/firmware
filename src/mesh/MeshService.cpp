@@ -322,7 +322,6 @@ void MeshService::sendToPhone(meshtastic_MeshPacket *p)
             //abort();
         }
         fromNum++;
-        return;
     }
 
     if (toPhoneQueue.numFree() == 0) {
