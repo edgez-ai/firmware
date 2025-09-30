@@ -32,6 +32,10 @@ extern RTC_FAST_ATTR uint8_t proto_buffer[LWM2M_PROTO_BUFFER_SIZE];
 
 // Global variables (removed temperature sensor usage)
 extern char serialNumber[64];
+    // Parse serial string into components: serialNumber:PinCode:PSK:Server
+extern char pinCode[32];
+extern char psk_key[64];
+extern char server[128];
 
 /**
  * LWM2M Client Manager for Meshtastic
@@ -53,12 +57,8 @@ public:
     lwm2m_context_t *client_handle = nullptr;
     lwm2m_object_t *objArray[LWM2M_OBJ_ARRAY_SIZE] = {0};
     
-    // Helper methods (public for task access)
-    esp_err_t readSerialFromFactory(char *serial_out);
     void saveSecurityInfoToRTC(const char *uri, const char *identity, size_t identity_len, 
                               const char *psk, size_t psk_len);
-    void parseSerialString(const char *serial, char *serialNumber, char *pinCode, 
-                          char *psk_key, char *server);
     esp_err_t resolveServerHostname(const char *server, char *resolved_ip, size_t ip_size);
     void setupObjects(bool isBootstrap, const char *server_uri, const char *identity, 
                      const char *psk, size_t psk_len);

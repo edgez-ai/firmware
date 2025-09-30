@@ -21,6 +21,7 @@
 
 // Static member definitions
 const char* LWM2MClient::LWM2M_TAG = "lwm2m_client";
+const char* LWM2M_TAG = "lwm2m_client";
 uint8_t LWM2MClient::rx_buffer[LWM2M_RX_BUFFER_SIZE];
 struct timeval LWM2MClient::sleep_enter_time;
 
@@ -31,8 +32,6 @@ RTC_DATA_ATTR char rtc_lwm2m_psk[17] = {0};
 RTC_DATA_ATTR client_data_t client_data = {0};
 RTC_FAST_ATTR uint8_t proto_buffer[LWM2M_PROTO_BUFFER_SIZE];
 
-// Global variables (temperature sensor removed)
-char serialNumber[64] = {0};
 LWM2MClient *lwm2mClient = nullptr;
 
 // C-style security function prototypes provided by LwM2M stack (implemented in dtlsconnection.c)
@@ -55,7 +54,7 @@ LWM2MClient::~LWM2MClient()
     stop();
 }
 
-esp_err_t LWM2MClient::readSerialFromFactory(char *serial_out)
+esp_err_t readSerialFromFactory(char *serial_out)
 {
     const esp_partition_t *serial_part = esp_partition_find_first(
         ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, "serialnumber");
@@ -101,7 +100,7 @@ void LWM2MClient::saveSecurityInfoToRTC(const char *uri, const char *identity, s
     }
 }
 
-void LWM2MClient::parseSerialString(const char *serial, char *serialNumber, char *pinCode,
+void parseSerialString(const char *serial, char *serialNumber, char *pinCode,
                                    char *psk_key, char *server)
 {
     char *token;
@@ -365,18 +364,7 @@ static void lwm2m_client_task(void *pvParameters)
 {
     LWM2MClient *client = static_cast<LWM2MClient*>(pvParameters);
     
-    char serial[256] = {0};
-    client->readSerialFromFactory(serial);
-    
-    // Parse serial string into components: serialNumber:PinCode:PSK:Server
-    char pinCode[32] = {0};
-    char psk_key[64] = {0};
-    char server[128] = {0};
-    client->parseSerialString(serial, serialNumber, pinCode, psk_key, server);
-    
-    ESP_LOGI(LWM2MClient::LWM2M_TAG, "serialNumber: %s, pinCode: %s, psk: %s, server: %s", 
-            serialNumber, pinCode, psk_key, server);
-    
+
     char LWM2M_SERVER_URI[160] = {0};
     char resolved_ip[64] = {0};
     
@@ -486,6 +474,19 @@ void startLwM2MClient()
     }
     
     lwm2mClient->startClientTask();
+}
+
+// Global function implementation
+void loadSerialNumber()
+{
+    char serial[256] = {0};
+    readSerialFromFactory(serial);
+    
+    parseSerialString(serial, serialNumber, pinCode, psk_key, server);
+    
+    ESP_LOGI(LWM2MClient::LWM2M_TAG, "serialNumber: %s, pinCode: %s, psk: %s, server: %s", 
+            serialNumber, pinCode, psk_key, server);
+    
 }
 
 #endif // ARCH_ESP32

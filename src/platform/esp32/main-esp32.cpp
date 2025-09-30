@@ -24,7 +24,7 @@
 #include <driver/rtc_io.h>
 #include <nvs.h>
 #include <nvs_flash.h>
-
+extern void loadSerialNumber();
 #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
 void setBluetoothEnable(bool enable)
 {
@@ -119,7 +119,7 @@ void esp32Setup()
     LOG_DEBUG("Free heap: %d", ESP.getFreeHeap());
     LOG_DEBUG("Total PSRAM: %d", ESP.getPsramSize());
     LOG_DEBUG("Free PSRAM: %d", ESP.getFreePsram());
-
+    loadSerialNumber();
     nvs_stats_t nvs_stats;
     auto res = nvs_get_stats(NULL, &nvs_stats);
     assert(res == ESP_OK);
