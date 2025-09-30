@@ -1,5 +1,6 @@
 #include "LWM2MAppClient.h"
 #include "configuration.h"
+#include "mesh/MeshService.h" // for service->getLwm2mForPhone()
 
 #ifdef ARCH_ESP32
 
@@ -30,8 +31,7 @@ RTC_DATA_ATTR char rtc_lwm2m_psk[17] = {0};
 RTC_DATA_ATTR client_data_t client_data = {0};
 RTC_FAST_ATTR uint8_t proto_buffer[LWM2M_PROTO_BUFFER_SIZE];
 
-// Global variables
-float tsens_out;
+// Global variables (temperature sensor removed)
 char serialNumber[64] = {0};
 LWM2MClient *lwm2mClient = nullptr;
 
@@ -202,21 +202,55 @@ void LWM2MClient::handleWakeupReason()
     }
 }
 
+// Reused function name to avoid changing call sites; now checks for new LwM2M-related MeshPackets
 void LWM2MClient::checkTemperatureUpdate()
 {
-    if (client_handle->state == STATE_READY) {
-        test_data_t *device_data = (test_data_t *)objArray[3]->userData;
-        if (device_data->test_integer != (int)tsens_out) {
-            printf("[%s] Temperature changed from %d, updating resource to %.2f\n", 
-                    LWM2M_TAG, device_data->test_integer, tsens_out);
-            device_data->test_integer = (int)tsens_out;
-            lwm2m_uri_t uri;
-            uri.objectId = 3442; // Device object
-            uri.instanceId = 0; // Instance 0
-            uri.resourceId = 120; // Test integer resource
-            lwm2m_resource_value_changed(client_handle, &uri);
-        }
+    // Validate readiness
+    if (!client_handle) {
+        ESP_LOGW(LWM2M_TAG, "checkTemperatureUpdate: client_handle null");
+        return;
     }
+    if (!service) {
+        ESP_LOGW(LWM2M_TAG, "checkTemperatureUpdate: MeshService 'service' pointer null");
+        return;
+    }
+    if (client_handle->state != STATE_READY) {
+        ESP_LOGD(LWM2M_TAG, "checkTemperatureUpdate: state %d not READY, skipping", client_handle->state);
+        return; // normal during startup
+    }
+
+    // Obtain next LwM2M packet destined for phone (non-blocking dequeue)
+    meshtastic_MeshPacket *p = service->getLwm2mForPhone();
+    if (!p) {
+        ESP_LOGD(LWM2M_TAG, "checkTemperatureUpdate: no new LwM2M packet in queue");
+        return; // no new packet
+    }
+
+    // Determine payload length (decoded payload if present)
+    int new_len = 0;
+    if (p->which_payload_variant == meshtastic_MeshPacket_decoded_tag) {
+        new_len = p->decoded.payload.size;
+    } else {
+        ESP_LOGW(LWM2M_TAG, "checkTemperatureUpdate: unexpected payload_variant=%d", p->which_payload_variant);
+    }
+
+    test_data_t *device_data = (test_data_t *)objArray[3]->userData;
+    if (device_data && device_data->test_integer != new_len) {
+        printf("[%s] LwM2M phone packet length changed from %d -> %d\n", LWM2M_TAG, device_data->test_integer, new_len);
+        device_data->test_integer = new_len;
+        lwm2m_uri_t uri;
+        uri.objectId = 3442; // Test object
+        uri.instanceId = 0;
+        uri.resourceId = 120; // Test integer resource
+        lwm2m_resource_value_changed(client_handle, &uri);
+    } else if (device_data) {
+        ESP_LOGD(LWM2M_TAG, "checkTemperatureUpdate: packet length %d unchanged", new_len);
+    } else {
+        ESP_LOGW(LWM2M_TAG, "checkTemperatureUpdate: test_data_t userData missing");
+    }
+
+    // Release packet back to pool now that we've consumed it
+    service->releaseToPool(p);
 }
 
 bool LWM2MClient::shouldEnterDeepSleep()
@@ -268,18 +302,8 @@ bool LWM2MClient::initialize()
         return true;
     }
 
-    // Initialize temperature sensor
-    temp_sensor_config_t temp_sensor = TSENS_CONFIG_DEFAULT();
-    auto temp_res = temp_sensor_set_config(temp_sensor);
-        if (temp_res == ESP_OK) {
-            temp_res = temp_sensor_start();
-            if (temp_res == ESP_OK) {
-                temp_res = temp_sensor_read_celsius(&tsens_out);
-                if (temp_res == ESP_OK) {
-                    printf("Temperature sensor initialized: %.2f °C\n", tsens_out);
-                }
-            }
-        }    // Initialize networking components
+    // Temperature sensor logic removed; proceed directly to networking init
+    // Initialize networking components
     auto net_res = esp_netif_init();
     if (net_res != ESP_OK) {
         printf("[%s] Failed to initialize netif: %s\n", LWM2M_TAG, esp_err_to_name(net_res));

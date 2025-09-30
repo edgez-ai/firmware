@@ -24,6 +24,12 @@
 #endif
 #endif
 
+// Default LwM2M queue size if not provided via build flags
+#ifndef MAX_RX_LWM2M_TOPHONE
+#define MAX_RX_LWM2M_TOPHONE 32
+#endif
+
+
 extern Allocator<meshtastic_QueueStatus> &queueStatusPool;
 extern Allocator<meshtastic_MqttClientProxyMessage> &mqttClientProxyMessagePool;
 extern Allocator<meshtastic_ClientNotification> &clientNotificationPool;
@@ -46,6 +52,13 @@ class MeshService
     PointerQueue<meshtastic_MeshPacket> toPhoneQueue;
 #else
     StaticPointerQueue<meshtastic_MeshPacket, MAX_RX_TOPHONE> toPhoneQueue;
+#endif
+
+    // keep list of LwM2M related MeshPackets to be sent to the phone (separate queue for prioritization/decoupling)
+#ifdef ARCH_PORTDUINO
+    PointerQueue<meshtastic_MeshPacket> toPhoneLwm2mQueue;
+#else
+    StaticPointerQueue<meshtastic_MeshPacket, MAX_RX_LWM2M_TOPHONE> toPhoneLwm2mQueue;
 #endif
 
     // keep list of QueueStatus packets to be send to the phone
@@ -104,6 +117,9 @@ class MeshService
     /// Return the next packet destined to the phone.  FIXME, somehow use fromNum to allow the phone to retry the
     /// last few packets if needs to.
     meshtastic_MeshPacket *getForPhone() { return toPhoneQueue.dequeuePtr(0); }
+
+    /// Return the next LwM2M related packet destined to the phone
+    meshtastic_MeshPacket *getLwm2mForPhone() { return toPhoneLwm2mQueue.dequeuePtr(0); }
 
     /// Allows the bluetooth handler to free packets after they have been sent
     void releaseToPool(meshtastic_MeshPacket *p) { packetPool.release(p); }

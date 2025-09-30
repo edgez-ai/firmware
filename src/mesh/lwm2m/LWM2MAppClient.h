@@ -11,7 +11,6 @@
 #include "examples/client/lwm2mclient.h"
 #include "examples/shared/dtlsconnection.h"
 #include "examples/shared/tinydtls/dtls_debug.h"
-#include "driver/temp_sensor.h"
 #include "esp_wifi.h"
 #include "esp_sleep.h"
 #include <sys/time.h>
@@ -31,8 +30,7 @@ extern RTC_DATA_ATTR char rtc_lwm2m_psk[17];
 extern RTC_DATA_ATTR client_data_t client_data;
 extern RTC_FAST_ATTR uint8_t proto_buffer[LWM2M_PROTO_BUFFER_SIZE];
 
-// Global variables
-extern float tsens_out;
+// Global variables (removed temperature sensor usage)
 extern char serialNumber[64];
 
 /**

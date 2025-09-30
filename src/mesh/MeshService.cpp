@@ -65,8 +65,9 @@ Allocator<meshtastic_QueueStatus> &queueStatusPool = staticQueueStatusPool;
 
 MeshService::MeshService()
 #ifdef ARCH_PORTDUINO
-    : toPhoneQueue(MAX_RX_TOPHONE), toPhoneQueueStatusQueue(MAX_RX_QUEUESTATUS_TOPHONE),
-      toPhoneMqttProxyQueue(MAX_RX_MQTTPROXY_TOPHONE), toPhoneClientNotificationQueue(MAX_RX_NOTIFICATION_TOPHONE)
+        : toPhoneQueue(MAX_RX_TOPHONE), toPhoneLwm2mQueue(MAX_RX_LWM2M_TOPHONE),
+            toPhoneQueueStatusQueue(MAX_RX_QUEUESTATUS_TOPHONE), toPhoneMqttProxyQueue(MAX_RX_MQTTPROXY_TOPHONE),
+            toPhoneClientNotificationQueue(MAX_RX_NOTIFICATION_TOPHONE)
 #endif
 {
     lastQueueStatus = {0, 0, 16, 0};
@@ -305,6 +306,24 @@ void MeshService::sendToPhone(meshtastic_MeshPacket *p)
     }
 #endif
 #endif
+
+
+    bool isLwm2m = (p->decoded.portnum == meshtastic_PortNum_LWM2M_APP);
+
+    if (isLwm2m) {
+        if (toPhoneLwm2mQueue.numFree() == 0) {
+            LOG_WARN("LwM2M toPhone queue full, discard oldest");
+            meshtastic_MeshPacket *d = toPhoneLwm2mQueue.dequeuePtr(0);
+            if (d)
+                releaseToPool(d);
+        }
+        if (toPhoneLwm2mQueue.enqueue(p, 0) == false) {
+            LOG_CRIT("Failed to queue a packet into toPhoneLwm2mQueue!");
+            abort();
+        }
+        fromNum++;
+        return;
+    }
 
     if (toPhoneQueue.numFree() == 0) {
         if (p->decoded.portnum == meshtastic_PortNum_TEXT_MESSAGE_APP ||

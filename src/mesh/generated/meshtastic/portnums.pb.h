@@ -137,6 +137,7 @@ typedef enum _meshtastic_PortNum {
  arbitrary telemetry over meshtastic that is not covered by telemetry.proto
  ENCODING: CayenneLLP */
     meshtastic_PortNum_CAYENNE_APP = 77,
+    meshtastic_PortNum_LWM2M_APP = 78, /* Reserved for LwM2M related traffic (portnum to be assigned) */
     /* Private applications should use portnums >= 256.
  To simplify initial development and testing you can use "PRIVATE_APP"
  in your code without needing to rebuild protobuf files (via [regen-protos.sh](https://github.com/meshtastic/firmware/blob/master/bin/regen-protos.sh)) */
