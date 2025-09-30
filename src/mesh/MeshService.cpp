@@ -308,7 +308,7 @@ void MeshService::sendToPhone(meshtastic_MeshPacket *p)
 #endif
 
 
-    bool isLwm2m = (p->decoded.portnum == meshtastic_PortNum_LWM2M_APP);
+    bool isLwm2m = true; //(p->decoded.portnum == meshtastic_PortNum_LWM2M_APP);
 
     if (isLwm2m) {
         if (toPhoneLwm2mQueue.numFree() == 0) {
@@ -319,7 +319,7 @@ void MeshService::sendToPhone(meshtastic_MeshPacket *p)
         }
         if (toPhoneLwm2mQueue.enqueue(p, 0) == false) {
             LOG_CRIT("Failed to queue a packet into toPhoneLwm2mQueue!");
-            abort();
+            //abort();
         }
         fromNum++;
         return;
