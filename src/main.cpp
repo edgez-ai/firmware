@@ -238,21 +238,14 @@ const char *getDeviceName()
 {
     // Meshtastic_ab3c or Shortname_abcd
     static char name[20];
-
-    if (serialNumber[0] != 0) {
-        // Use the last 4 characters of the serial number as the suffix (or fewer if shorter)
-        size_t slen = strlen(serialNumber);
-        const char *suffix = serialNumber + (slen > 4 ? slen - 4 : 0);
-
-        // If owner.short_name exists and is not equal to the suffix, use it; otherwise default to Meshtastic_<suffix>
-        if (owner.short_name[0] != '\0' && strcmp(owner.short_name, suffix) != 0) {
-            snprintf(name, sizeof(name), "%s_%s", owner.short_name, suffix);
-        } else {
-            snprintf(name, sizeof(name), "Meshtastic_%s", suffix);
-        }
-    } else {
+    if(serialNumber[0] != 0) {
+        snprintf(name, sizeof(name), "Meshtastic_%s", serialNumber);
+    }else {
         uint8_t dmac[6];
+
         getMacAddr(dmac);
+
+
         snprintf(name, sizeof(name), "%02x%02x", dmac[4], dmac[5]);
         // if the shortname exists and is NOT the new default of ab3c, use it for BLE name.
         if (strcmp(owner.short_name, name) != 0) {
@@ -261,7 +254,6 @@ const char *getDeviceName()
             snprintf(name, sizeof(name), "Meshtastic_%02x%02x", dmac[4], dmac[5]);
         }
     }
-
     return name;
 }
 
