@@ -31,18 +31,8 @@ RTC_DATA_ATTR char rtc_lwm2m_identity[64] = {0};
 RTC_DATA_ATTR char rtc_lwm2m_psk[17] = {0};
 RTC_DATA_ATTR client_data_t client_data = {0};
 RTC_FAST_ATTR uint8_t proto_buffer[LWM2M_PROTO_BUFFER_SIZE];
-
+extern NodeDB *nodeDB;
 LWM2MClient *lwm2mClient = nullptr;
-
-// C-style security function prototypes provided by LwM2M stack (implemented in dtlsconnection.c)
-extern "C" {
-    char *security_get_uri(lwm2m_context_t *lwm2mH, lwm2m_object_t *obj, int instanceId,
-                           char *uriBuffer, size_t bufferSize);
-    char *security_get_public_id(lwm2m_context_t *lwm2mH, lwm2m_object_t *obj, int instanceId,
-                                 size_t *length);
-    char *security_get_secret_key(lwm2m_context_t *lwm2mH, lwm2m_object_t *obj, int instanceId,
-                                  size_t *length);
-}
 
 LWM2MClient::LWM2MClient() : client_handle(nullptr), initialized(false), inactivity_counter(0)
 {
@@ -170,6 +160,7 @@ void LWM2MClient::setupObjects(bool isBootstrap, const char *server_uri, const c
 
     objArray[1] = get_server_object(1, "U", 300, false);
     objArray[2] = get_object_device();
+    device_add_instance(objArray[2], 0);
     objArray[3] = get_test_object();
 }
 
@@ -413,12 +404,14 @@ static void lwm2m_client_task(void *pvParameters)
         vTaskDelete(NULL);
         return;
     }
+    // Initialize registration update timer so that first update happens one minute after start
     
     if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
         ESP_LOGI(LWM2MClient::LWM2M_TAG, "Restored LwM2M client state to STATE_READY");
     }
     
     while (1) {
+        client->registrationUpdate();
         client->step();
         //lwm2m_object_t * securityObj = client_data.securityObjP;
         //char uri_buf[128] = {0};
@@ -464,6 +457,23 @@ bool LWM2MClient::isReady() const
 int LWM2MClient::getState() const
 {
     return client_handle ? client_handle->state : STATE_INITIAL;
+}
+
+void LWM2MClient::registrationUpdate()
+{
+    if (!client_handle) {
+        return;
+    }
+    lwm2m_object_t * securityObj = client_data.securityObjP;
+    int64_t shortServerId = security_get_short_server_id(client_handle, securityObj, 1);
+    time_t now = lwm2m_gettime();
+    if (now - last_registration_update >= LWM2M_REGISTRATION_UPDATE_INTERVAL) {
+        // update object resources if needed before registration update
+        meshtastic_NodeInfoLite *onlineNodes = nodeDB->getOnlineMeshNodes(true); // refresh nodeDB state
+        ESP_LOGI(LWM2M_TAG, "Forcing registration update");
+        lwm2m_update_registration(client_handle, shortServerId,true);
+        last_registration_update = now;
+    }
 }
 
 // Global function implementation

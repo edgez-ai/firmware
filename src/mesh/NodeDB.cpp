@@ -1527,6 +1527,33 @@ size_t NodeDB::getNumOnlineMeshNodes(bool localOnly)
     return numseen;
 }
 
+/*
+ * Return a pointer to a contiguous array of NodeInfoLite entries that are currently "online".
+ * Online is defined the same as in getNumOnlineMeshNodes(): last_heard within NUM_ONLINE_SECS.
+ * If localOnly is true, nodes first heard via MQTT are excluded (via_mqtt == true).
+ *
+ * The returned pointer is only valid until the next call to getOnlineMeshNodes() and refers to
+ * an internal static buffer. If no nodes are online nullptr is returned.
+ */
+meshtastic_NodeInfoLite *NodeDB::getOnlineMeshNodes(bool localOnly)
+{
+    static std::vector<meshtastic_NodeInfoLite> online; // reused buffer to avoid allocations
+    online.clear();
+    online.reserve(numMeshNodes); // ensure enough space (MAX_NUM_NODES is small)
+
+    for (int i = 0; i < numMeshNodes; i++) {
+        meshtastic_NodeInfoLite &n = meshNodes->at(i);
+        if (localOnly && n.via_mqtt)
+            continue;
+        if (sinceLastSeen(&n) < NUM_ONLINE_SECS)
+            online.push_back(n);
+    }
+
+    if (online.empty())
+        return nullptr;
+    return online.data();
+}
+
 #include "MeshModule.h"
 #include "Throttle.h"
 

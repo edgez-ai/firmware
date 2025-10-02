@@ -224,6 +224,7 @@ class NodeDB
      * @param localOnly if true, ignore nodes heard via MQTT
      */
     size_t getNumOnlineMeshNodes(bool localOnly = false);
+    meshtastic_NodeInfoLite* getOnlineMeshNodes(bool localOnly = false);
 
     void initConfigIntervals(), initModuleConfigIntervals(), resetNodes(), removeNodeByNum(NodeNum nodeNum);
 

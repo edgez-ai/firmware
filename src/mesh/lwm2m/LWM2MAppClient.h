@@ -22,6 +22,7 @@
 #define LWM2M_INACTIVITY_LIMIT 40  // seconds
 #define LWM2M_WAKEUP_TIME_SEC 20
 #define LWM2M_LOCAL_PORT "56830"
+#define LWM2M_REGISTRATION_UPDATE_INTERVAL 60000 // seconds
 
 // RTC memory variables for deep sleep persistence
 extern RTC_DATA_ATTR char rtc_lwm2m_server_uri[128];
@@ -70,6 +71,7 @@ public:
 private:
     bool initialized = false;
     int inactivity_counter = 0;
+    time_t last_registration_update = 0; // epoch time of last registration update
 
 public:
     LWM2MClient();
@@ -86,6 +88,11 @@ public:
      * Should be called periodically from the main task
      */
     void step();
+    
+    /**
+     * Force an immediate LwM2M registration update on next step
+     */
+    void registrationUpdate();
 
     /**
      * Start the LWM2M client task
@@ -108,16 +115,6 @@ public:
      */
     int getState() const;
 };
-
-// C-style function wrappers for LWM2M client callbacks
-extern "C" {
-    char *security_get_uri(lwm2m_context_t *lwm2mH, lwm2m_object_t *obj, int instanceId, 
-                          char *uriBuffer, size_t bufferSize);
-    char *security_get_public_id(lwm2m_context_t *lwm2mH, lwm2m_object_t *obj, int instanceId, 
-                                size_t *length);
-    char *security_get_secret_key(lwm2m_context_t *lwm2mH, lwm2m_object_t *obj, int instanceId, 
-                                 size_t *length);
-}
 
 // Global LWM2M client instance
 extern LWM2MClient *lwm2mClient;
