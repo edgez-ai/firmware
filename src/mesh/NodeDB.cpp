@@ -1936,11 +1936,11 @@ meshtastic_NodeInfoLite *NodeDB::getOrCreateMeshNode(NodeNum n)
                 (numMeshNodes)--;
             }
         }
-        uint16_t instanceId = 0;
+        uint16_t instanceId = 1;
         if (numMeshNodes > 0) {
             // Increment instanceId with explicit wrap to 0 after UINT16_MAX to avoid implicit rollover ambiguity
             uint16_t prevInstanceId = meshNodes->at(numMeshNodes - 1).instanceId;
-            instanceId = (prevInstanceId == UINT16_MAX) ? 0 : static_cast<uint16_t>(prevInstanceId + 1);
+            instanceId = (prevInstanceId == 0x7FFF) ? 1 : static_cast<uint16_t>(prevInstanceId + 1);
         }
         // add the node at the end
         lite = &meshNodes->at((numMeshNodes)++);

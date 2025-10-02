@@ -212,7 +212,6 @@ void LWM2MClient::checkTemperatureUpdate()
     // Obtain next LwM2M packet destined for phone (non-blocking dequeue)
     meshtastic_MeshPacket *p = service->getLwm2mForPhone();
     if (!p) {
-        ESP_LOGD(LWM2M_TAG, "checkTemperatureUpdate: no new LwM2M packet in queue");
         return; // no new packet
     }
 
@@ -240,7 +239,7 @@ void LWM2MClient::checkTemperatureUpdate()
     }
 
     // Release packet back to pool now that we've consumed it
-    service->releaseToPool(p);
+    // service->releaseToPool(p);
 }
 
 bool LWM2MClient::shouldEnterDeepSleep()
@@ -411,7 +410,7 @@ static void lwm2m_client_task(void *pvParameters)
     }
     
     while (1) {
-        client->registrationUpdate();
+        //client->registrationUpdate();
         client->step();
         //lwm2m_object_t * securityObj = client_data.securityObjP;
         //char uri_buf[128] = {0};
@@ -469,9 +468,9 @@ void LWM2MClient::registrationUpdate()
     time_t now = lwm2m_gettime();
     if (now - last_registration_update >= LWM2M_REGISTRATION_UPDATE_INTERVAL) {
         // update object resources if needed before registration update
-        meshtastic_NodeInfoLite *onlineNodes = nodeDB->getOnlineMeshNodes(true); // refresh nodeDB state
+       //  meshtastic_NodeInfoLite *onlineNodes = nodeDB->getOnlineMeshNodes(true); // refresh nodeDB state
         ESP_LOGI(LWM2M_TAG, "Forcing registration update");
-        lwm2m_update_registration(client_handle, shortServerId,true);
+        lwm2m_update_registration(client_handle, shortServerId,false);
         last_registration_update = now;
     }
 }
@@ -482,7 +481,10 @@ void startLwM2MClient()
     if (!lwm2mClient) {
         lwm2mClient = new LWM2MClient();
     }
-    
+    if(lwm2mClient->isReady()) {
+        printf("[%s] LWM2M client already running\n", LWM2M_TAG);
+        return;
+    }
     lwm2mClient->startClientTask();
 }
 
