@@ -99,6 +99,9 @@ typedef struct _meshtastic_NodeInfoLite {
     /* Bitfield for storing booleans.
  LSB 0 is_key_manually_verified */
     uint32_t bitfield;
+    /* actually it's uint16 make it compatibile with LwM2M standard,
+ but good to have only 15 bits, the highest bit is reserved for
+ LwM2M update add(0) or remove(1) */
     int32_t instanceId;
 } meshtastic_NodeInfoLite;
 

@@ -300,7 +300,7 @@ class NodeDB
     uint32_t lastSort = 0;          // When last sorted the nodeDB
     /// Find a node in our DB, create an empty NodeInfoLite if missing
     meshtastic_NodeInfoLite *getOrCreateMeshNode(NodeNum n);
-
+    uint16_t maxInstanceId = 0;
     /*
      * Internal boolean to track sorting paused
      */

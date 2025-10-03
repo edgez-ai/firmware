@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cerrno>
 #include <fcntl.h>
+#include "dtls_debug.h"
 
 // Static member definitions
 const char* LWM2MClient::LWM2M_TAG = "lwm2m_client";
@@ -161,8 +162,7 @@ void LWM2MClient::setupObjects(bool isBootstrap, const char *server_uri, const c
     objArray[1] = get_server_object(1, "U", 300, false);
     objArray[2] = get_object_device();
     device_add_instance(objArray[2], 0);
-    device_add_instance(objArray[2], 1); // add second instance for testing multiple instances
-    device_add_instance(objArray[2], 2); // add third instance for testing multiple instances
+    device_update_instance_string(objArray[2], 0, 2, "hello"); // Set Power Source to Battery
     objArray[3] = get_test_object();
 }
 
@@ -292,7 +292,7 @@ bool LWM2MClient::initialize()
     if (initialized) {
         return true;
     }
-
+    dtls_set_log_level(DTLS_LOG_INFO);
     // Temperature sensor logic removed; proceed directly to networking init
     // Initialize networking components
     auto net_res = esp_netif_init();
@@ -333,8 +333,10 @@ void LWM2MClient::step()
                       (struct sockaddr *)&source_addr, &socklen);
 
     if (len > 0) {
-        printf("[%s] Received %d bytes\n", LWM2M_TAG, len);
-        connection_handle_packet(client_data.connList, rx_buffer, len);
+
+        ESP_LOGI(LWM2M_TAG, "recvfrom -> forwarding to connection_handle_packet len=%d", len);
+        int cres = connection_handle_packet(client_data.connList, rx_buffer, len);
+        ESP_LOGI(LWM2M_TAG, "connection_handle_packet returned %d", cres);
         inactivity_counter = 0; // reset inactivity counter
     } else {
         if (client_handle->state == STATE_READY) {
@@ -485,11 +487,12 @@ void LWM2MClient::registrationUpdate()
         for(size_t i=0; i<numOnline; i++) {
             meshtastic_NodeInfoLite *node = &onlineNodes[i];
             if(node) {
-                ESP_LOGI(LWM2M_TAG, "Node %u last_heard %u via_mqtt %d hops_away %d is_favorite %d is_ignored %d next_hop %u", 
+                ESP_LOGI(LWM2M_TAG, "Node %u last_heard %u via_mqtt %d hops_away %d is_favorite %d is_ignored %d next_hop %u %d", 
                         node->num, node->last_heard, node->via_mqtt, 
                         node->has_hops_away ? node->hops_away : -1,
-                        node->is_favorite, node->is_ignored, node->next_hop);
+                        node->is_favorite, node->is_ignored, node->next_hop, node->instanceId);
                 device_add_instance(objArray[2], node->instanceId);
+                device_update_instance_string(objArray[2], node->instanceId, 2, "hello"); // Manufacturer
             }
             
         }

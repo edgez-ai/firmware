@@ -1193,6 +1193,13 @@ void NodeDB::loadFromDisk()
     }
     meshNodes->resize(MAX_NUM_NODES);
 
+    // iterate through nodes to find maxInstanceId
+    for (const auto &node : *meshNodes) {
+        if (node.instanceId > maxInstanceId) {
+            maxInstanceId = node.instanceId;
+        }
+    }
+
     // static DeviceState scratch; We no longer read into a tempbuf because this structure is 15KB of valuable RAM
     state = loadProto(deviceStateFileName, meshtastic_DeviceState_size, sizeof(meshtastic_DeviceState),
                       &meshtastic_DeviceState_msg, &devicestate);
@@ -1936,12 +1943,6 @@ meshtastic_NodeInfoLite *NodeDB::getOrCreateMeshNode(NodeNum n)
                 (numMeshNodes)--;
             }
         }
-        uint16_t instanceId = 1;
-        if (numMeshNodes > 0) {
-            // Increment instanceId with explicit wrap to 0 after UINT16_MAX to avoid implicit rollover ambiguity
-            uint16_t prevInstanceId = meshNodes->at(numMeshNodes - 1).instanceId;
-            instanceId = (prevInstanceId == 0x7FFF) ? 1 : static_cast<uint16_t>(prevInstanceId + 1);
-        }
         // add the node at the end
         lite = &meshNodes->at((numMeshNodes)++);
 
@@ -1949,7 +1950,7 @@ meshtastic_NodeInfoLite *NodeDB::getOrCreateMeshNode(NodeNum n)
         memset(lite, 0, sizeof(*lite));
         lite->num = n;
         // set instanceId to be last node instanceId + 1
-        lite->instanceId = instanceId;
+        lite->instanceId = ++maxInstanceId;
         LOG_INFO("Adding node to database with %i nodes and %u bytes free!", numMeshNodes, memGet.getFreeHeap());
     }
 
