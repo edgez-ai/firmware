@@ -22,7 +22,7 @@
 #define LWM2M_INACTIVITY_LIMIT 40  // seconds
 #define LWM2M_WAKEUP_TIME_SEC 20
 #define LWM2M_LOCAL_PORT "56830"
-#define LWM2M_REGISTRATION_UPDATE_INTERVAL 60000 // seconds
+#define LWM2M_REGISTRATION_UPDATE_INTERVAL 60 // seconds
 
 // RTC memory variables for deep sleep persistence
 extern RTC_DATA_ATTR char rtc_lwm2m_server_uri[128];

@@ -161,6 +161,8 @@ void LWM2MClient::setupObjects(bool isBootstrap, const char *server_uri, const c
     objArray[1] = get_server_object(1, "U", 300, false);
     objArray[2] = get_object_device();
     device_add_instance(objArray[2], 0);
+    device_add_instance(objArray[2], 1); // add second instance for testing multiple instances
+    device_add_instance(objArray[2], 2); // add third instance for testing multiple instances
     objArray[3] = get_test_object();
 }
 
@@ -410,7 +412,7 @@ static void lwm2m_client_task(void *pvParameters)
     }
     
     while (1) {
-        //client->registrationUpdate();
+        client->registrationUpdate();
         client->step();
         //lwm2m_object_t * securityObj = client_data.securityObjP;
         //char uri_buf[128] = {0};
@@ -463,15 +465,38 @@ void LWM2MClient::registrationUpdate()
     if (!client_handle) {
         return;
     }
-    lwm2m_object_t * securityObj = client_data.securityObjP;
-    int64_t shortServerId = security_get_short_server_id(client_handle, securityObj, 1);
+    if (!isReady()) {
+        return;
+    }
+
+
     time_t now = lwm2m_gettime();
     if (now - last_registration_update >= LWM2M_REGISTRATION_UPDATE_INTERVAL) {
-        // update object resources if needed before registration update
-       //  meshtastic_NodeInfoLite *onlineNodes = nodeDB->getOnlineMeshNodes(true); // refresh nodeDB state
-        ESP_LOGI(LWM2M_TAG, "Forcing registration update");
-        lwm2m_update_registration(client_handle, shortServerId,false);
+            lwm2m_object_t *securityObj = client_data.securityObjP;
+        if (!securityObj) {
+            ESP_LOGW(LWM2M_TAG, "registrationUpdate: securityObj NULL");
+            return;
+        }
+
+
+        int64_t shortServerId = security_get_short_server_id(client_handle, securityObj, 0);
+        meshtastic_NodeInfoLite *onlineNodes = nodeDB->getOnlineMeshNodes(true); 
+        size_t numOnline = nodeDB->getNumOnlineMeshNodes(true);
+        for(size_t i=0; i<numOnline; i++) {
+            meshtastic_NodeInfoLite *node = &onlineNodes[i];
+            if(node) {
+                ESP_LOGI(LWM2M_TAG, "Node %u last_heard %u via_mqtt %d hops_away %d is_favorite %d is_ignored %d next_hop %u", 
+                        node->num, node->last_heard, node->via_mqtt, 
+                        node->has_hops_away ? node->hops_away : -1,
+                        node->is_favorite, node->is_ignored, node->next_hop);
+                device_add_instance(objArray[2], node->instanceId);
+            }
+            
+        }
+        lwm2m_update_registration(client_handle, 123,true);
+        ESP_LOGI(LWM2M_TAG, "Forcing registration update (SSID= %d)", (int)shortServerId);
         last_registration_update = now;
+       
     }
 }
 
