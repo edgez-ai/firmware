@@ -494,10 +494,14 @@ void LWM2MClient::registrationUpdate()
                 device_add_instance(objArray[2], node->instanceId);
                 // Update resource (e.g., manufacturer/name field) with the numeric node ID as a 12-char zero-padded string
                 char nodeNumStr[13]; // 12 chars + null terminator
+                char modelStr[3]; // 12 chars + null terminator
                 // Output hardware model as 12-character zero-padded uppercase hex
                 // (truncate if underlying value would exceed 12 hex digits)
                 snprintf(nodeNumStr, sizeof(nodeNumStr), "%02X%010u", (unsigned int)node->user.hw_model, node->num);
+                snprintf(modelStr, sizeof(modelStr), "%02X", node->user.hw_model);
                 device_update_instance_string(objArray[2], node->instanceId, 2, nodeNumStr); // Manufacturer set to hw_model hex
+                device_update_instance_string(objArray[2], node->instanceId, 3, modelStr); // Model Number set to hw_model hex
+                device_update_instance_value(objArray[2], node->instanceId, 9, node->device_metrics.battery_level); // Serial Number
             }
             
         }
