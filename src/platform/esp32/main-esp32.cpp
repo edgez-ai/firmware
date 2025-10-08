@@ -177,11 +177,17 @@ void esp32Setup()
 // #define APP_WATCHDOG_SECS 45
 #define APP_WATCHDOG_SECS 90
 
+// NOTE: For ESP-IDF 5.x the new esp_task_wdt_init() signature on some targets
+// takes a config struct; older path uses (timeout, panic). Avoid heap alloc.
 #ifdef CONFIG_IDF_TARGET_ESP32C6
-    esp_task_wdt_config_t *wdt_config = (esp_task_wdt_config_t *)malloc(sizeof(esp_task_wdt_config_t));
-    wdt_config->timeout_ms = APP_WATCHDOG_SECS * 1000;
-    wdt_config->trigger_panic = true;
-    res = esp_task_wdt_init(wdt_config);
+    esp_task_wdt_config_t wdt_config = {
+        .timeout_ms = (uint32_t)(APP_WATCHDOG_SECS * 1000),
+        .trigger_panic = true,
+#if defined(ESP_IDF_VERSION_MAJOR) && (ESP_IDF_VERSION_MAJOR >= 5)
+        // Optional fields may exist; zeroed implicitly if not defined.
+#endif
+    };
+    res = esp_task_wdt_init(&wdt_config);
     assert(res == ESP_OK);
 #else
     res = esp_task_wdt_init(APP_WATCHDOG_SECS, true);
