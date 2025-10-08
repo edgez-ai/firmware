@@ -35,4 +35,7 @@ bool isOneOf(int item, int count, ...);
 
 const std::string vformat(const char *const zcFormat, ...);
 
+// Write 32-bit little-endian value
+void put_le32(uint8_t *dst, unsigned int v);
+
 #define IS_ONE_OF(item, ...) isOneOf(item, sizeof((int[]){__VA_ARGS__}) / sizeof(int), __VA_ARGS__)

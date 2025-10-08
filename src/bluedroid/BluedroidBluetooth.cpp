@@ -5,6 +5,7 @@
 #include "BluedroidBluetooth.h"
 #include "BluetoothCommon.h"
 #include "mesh/mesh-pb-constants.h"
+#include "BluetoothStatus.h"
 #include "mesh/PhoneAPI.h"
 #include "sleep.h"
 #include "PowerFSM.h"
@@ -119,30 +120,25 @@ void BluedroidBluetooth::initSecurity()
 bool BluedroidBluetooth::isActive() { return servicesCreated; }
 bool BluedroidBluetooth::isConnected() { return connected.load(); }
 
-int BluedroidBluetooth::getRssi()
-{
-    // Asynchronous in Bluedroid; simplified: return 0 (could trigger esp_ble_gap_read_rssi and cache)
-    return 0;
-}
+int BluedroidBluetooth::getRssi() { return lastRssi; }
 
 void BluedroidBluetooth::createServices()
 {
     phoneAPI = new BluetoothPhoneAPIImpl();
-    phoneAPI->start();
 
     // Create Mesh Service
     esp_gatt_srvc_id_t service_id = {};
     service_id.id.inst_id = 0;
     auto meshUuid = make128Uuid(MESH_SERVICE_UUID);
-    service_id.id.uuid = meshUuid.uuid;
+    service_id.id.uuid = meshUuid; // assign full uuid struct
     service_id.is_primary = true;
     esp_ble_gatts_create_service(gattsIf, &service_id, 20); // attr count estimate
-    // Battery service will be created after main service start in event handler
+    // Battery service created in CREATE_EVT after mesh service
 }
 
 void BluedroidBluetooth::startAdvertising()
 {
-    esp_ble_adv_params_t adv_params = {
+    static esp_ble_adv_params_t adv_params = {
         .adv_int_min = 0x0200, // ~320ms
         .adv_int_max = 0x0200,
         .adv_type = ADV_TYPE_IND,
@@ -201,6 +197,28 @@ void BluedroidBluetooth::showPasskey(uint32_t passkey)
     // Mirror NimBLE UX (simplified: just log)
     LOG_INFO("*** Enter passkey %06u on peer ***", passkey);
     passkeyShowing = true;
+    updateStatusPairing(passkey);
+#if HAS_SCREEN
+    if (screen) {
+        screen->startAlert([passkey](OLEDDisplay *display, OLEDDisplayUiState *state, int16_t x, int16_t y) -> void {
+            char btPIN[16] = "000000";
+            snprintf(btPIN, sizeof(btPIN), "%06u", passkey);
+            int x_offset = display->width() / 2;
+            int y_offset = display->height() <= 80 ? 0 : 12;
+            display->setTextAlignment(TEXT_ALIGN_CENTER);
+            display->setFont(FONT_MEDIUM);
+            display->drawString(x_offset + x, y_offset + y, "Bluetooth");
+            display->setFont(FONT_SMALL);
+            y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_MEDIUM - 4 : y_offset + FONT_HEIGHT_MEDIUM + 5;
+            display->drawString(x_offset + x, y_offset + y, "Enter this code");
+            display->setFont(FONT_LARGE);
+            char pin[8];
+            snprintf(pin, sizeof(pin), "%.3s %.3s", btPIN, btPIN + 3);
+            y_offset = display->height() == 64 ? y_offset + FONT_HEIGHT_SMALL - 5 : y_offset + FONT_HEIGHT_SMALL + 5;
+            display->drawString(x_offset + x, y_offset + y, pin);
+        });
+    }
+#endif
 }
 
 void BluedroidBluetooth::clearBonds()
@@ -241,7 +259,22 @@ void BluedroidBluetooth::setup()
     instance = this;
     initController();
     initSecurity();
+    // Request larger MTU for log characteristic
+    esp_ble_gatt_set_local_mtu(517);
+    // Create periodic RSSI timer (lazy start on connect)
+    const esp_timer_create_args_t targs = {
+        .callback = [](void *arg){
+            auto *self = static_cast<BluedroidBluetooth*>(arg);
+            if (self->connected) esp_ble_gap_read_rssi(self->peerBda);
+        },
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "ble_rssi"};
+    esp_timer_create(&targs, &rssiTimer);
     servicesCreated = true; // Mark early, actual handles assigned later
+#ifdef USE_PERIODIC_ADV_SYNC_DEMO
+    enablePeriodicAdvSyncDemo();
+#endif
 }
 
 // GAP callback static
@@ -253,6 +286,51 @@ void BluedroidBluetooth::gapEventHandler(esp_gap_ble_cb_event_t event, esp_ble_g
     case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT:
         esp_ble_gap_start_advertising(nullptr); // use last params
         break;
+    case ESP_GAP_BLE_SET_EXT_SCAN_PARAMS_COMPLETE_EVT:
+        break;
+    case ESP_GAP_BLE_EXT_SCAN_START_COMPLETE_EVT:
+        LOG_INFO("Extended scan start status=%d", param->ext_scan_start.status);
+        break;
+    case ESP_GAP_BLE_EXT_ADV_REPORT_EVT: {
+#ifdef USE_PERIODIC_ADV_SYNC_DEMO
+        if (!self->pasPeriodicSync) {
+            uint8_t name_len = 0;
+            uint8_t *adv_name = esp_ble_resolve_adv_data(param->ext_adv_report.params.adv_data, ESP_BLE_AD_TYPE_NAME_CMPL, &name_len);
+            if (adv_name && (memcmp(adv_name, self->pasRemoteName, name_len) == 0)) {
+                self->pasPeriodicSync = true;
+                self->pasPeriodicParams.sid = param->ext_adv_report.params.sid;
+                self->pasPeriodicParams.addr_type = (esp_ble_addr_type_t)param->ext_adv_report.params.addr_type;
+                memcpy(self->pasPeriodicParams.addr, param->ext_adv_report.params.addr, sizeof(esp_bd_addr_t));
+                esp_err_t r = esp_ble_gap_periodic_adv_create_sync(&self->pasPeriodicParams);
+                if (r != ESP_OK) {
+                    LOG_ERROR("Create sync failed %s", esp_err_to_name(r));
+                    self->pasPeriodicSync = false;
+                } else {
+                    LOG_INFO("Creating periodic sync with %.*s", name_len, (char*)adv_name);
+                }
+            }
+        }
+#endif
+    } break;
+    case ESP_GAP_BLE_PERIODIC_ADV_SYNC_ESTAB_EVT: {
+#ifdef USE_PERIODIC_ADV_SYNC_DEMO
+        LOG_INFO("Sync estab status=%d handle=%d sid=%d interval=%.2f ms phy=%d", param->periodic_adv_sync_estab.status,
+                 param->periodic_adv_sync_estab.sync_handle, param->periodic_adv_sync_estab.sid,
+                 param->periodic_adv_sync_estab.period_adv_interval * 1.25f, param->periodic_adv_sync_estab.adv_phy);
+        self->pasValidateConfig(param->periodic_adv_sync_estab.period_adv_interval);
+#endif
+    } break;
+    case ESP_GAP_BLE_PERIODIC_ADV_SYNC_LOST_EVT: {
+#ifdef USE_PERIODIC_ADV_SYNC_DEMO
+        LOG_WARN("Periodic adv sync lost handle=%d", param->periodic_adv_sync_lost.sync_handle);
+        self->pasPeriodicSync = false;
+#endif
+    } break;
+    case ESP_GAP_BLE_PERIODIC_ADV_REPORT_EVT: {
+#ifdef USE_PERIODIC_ADV_SYNC_DEMO
+        LOG_DEBUG("Periodic adv report len=%d rssi=%d", param->period_adv_report.params.data_length, param->period_adv_report.params.rssi);
+#endif
+    } break;
     case ESP_GAP_BLE_SEC_REQ_EVT:
         esp_ble_gap_security_rsp(param->ble_security.ble_req.bd_addr, true);
         break;
@@ -266,9 +344,22 @@ void BluedroidBluetooth::gapEventHandler(esp_gap_ble_cb_event_t event, esp_ble_g
         self->showPasskey(passkey);
         esp_ble_passkey_reply(param->ble_security.ble_req.bd_addr, true, passkey);
     } break;
-    case ESP_GAP_BLE_AUTH_CMPL_EVT:
-        if (passkeyShowing) passkeyShowing = false;
-        break;
+    case ESP_GAP_BLE_AUTH_CMPL_EVT: {
+        if (param->ble_security.auth_cmpl.success) {
+            self->updateStatusConnected();
+        } else {
+            self->updateStatusDisconnected();
+        }
+        if (passkeyShowing) {
+            passkeyShowing = false;
+            if (screen) screen->endAlert();
+        }
+    } break;
+    case ESP_GAP_BLE_READ_RSSI_COMPLETE_EVT: {
+        if (param->read_rssi_cmpl.status == ESP_BT_STATUS_SUCCESS) {
+            self->lastRssi = param->read_rssi_cmpl.rssi;
+        }
+    } break;
     default:
         break;
     }
@@ -318,7 +409,14 @@ void BluedroidBluetooth::gattsEventHandler(esp_gatts_cb_event_t event, esp_gatt_
                 batt_id.id.inst_id = 0;
                 batt_id.id.uuid.len = ESP_UUID_LEN_16;
                 batt_id.id.uuid.uuid.uuid16 = 0x180F;
-                esp_ble_gatts_create_service(gatts_if, &batt_id, 4);
+                esp_ble_gatts_create_service(gatts_if, &batt_id, 5);
+            }
+            else if (self->batteryServiceHandle == 0) {
+                self->batteryServiceHandle = param->create.service_handle;
+                esp_ble_gatts_start_service(self->batteryServiceHandle);
+                esp_bt_uuid_t battCharUuid = {.len = ESP_UUID_LEN_16, .uuid = {.uuid16 = 0x2A19}};
+                esp_gatt_char_prop_t props = (esp_gatt_char_prop_t)(ESP_GATT_CHAR_PROP_BIT_READ | ESP_GATT_CHAR_PROP_BIT_NOTIFY);
+                esp_ble_gatts_add_char(self->batteryServiceHandle, &battCharUuid, ESP_GATT_PERM_READ, props, nullptr, nullptr);
             }
         }
     } break;
@@ -329,6 +427,23 @@ void BluedroidBluetooth::gattsEventHandler(esp_gatts_cb_event_t event, esp_gatt_
             for (size_t i = 0; i < (size_t)MeshCharId::COUNT; ++i) {
                 if (self->charHandles[i] == 0) { self->charHandles[i] = param->add_char.attr_handle; break; }
             }
+            // Immediately add CCCD descriptor for notify types
+            esp_bt_uuid_t cccdUuid = {.len = ESP_UUID_LEN_16, .uuid = {.uuid16 = ESP_GATT_UUID_CHAR_CLIENT_CONFIG}};
+            if (param->add_char.char_uuid.len == ESP_UUID_LEN_16 && param->add_char.char_uuid.uuid.uuid16 == 0x2A19) {
+                self->batteryLevelCccdHandle = 0; // will be set in ADD_CHAR_DESCR_EVT
+                esp_ble_gatts_add_char_descr(self->batteryServiceHandle, &cccdUuid, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE, nullptr, nullptr);
+            } else if (param->add_char.char_uuid.len == ESP_UUID_LEN_128) {
+                // All 128-bit notifies: FromNum, LogRadio
+                esp_ble_gatts_add_char_descr(self->meshServiceHandle, &cccdUuid, ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE, nullptr, nullptr);
+            }
+        }
+    } break;
+    case ESP_GATTS_ADD_CHAR_DESCR_EVT: {
+        if (param->add_char_descr.status == ESP_GATT_OK) {
+            // Heuristically assign to first descriptor needing a handle
+            if (self->fromNumCccdHandle == 0 && self->charHandles[(size_t)MeshCharId::FromNum]) self->fromNumCccdHandle = param->add_char_descr.attr_handle;
+            else if (self->logRadioCccdHandle == 0 && self->charHandles[(size_t)MeshCharId::LogRadio]) self->logRadioCccdHandle = param->add_char_descr.attr_handle;
+            else if (self->batteryLevelCccdHandle == 0 && self->charHandles[(size_t)MeshCharId::BatteryLevel]) self->batteryLevelCccdHandle = param->add_char_descr.attr_handle;
         }
     } break;
     case ESP_GATTS_START_EVT: {
@@ -340,12 +455,17 @@ void BluedroidBluetooth::gattsEventHandler(esp_gatts_cb_event_t event, esp_gatt_
         self->connected = true;
         self->connId = param->connect.conn_id;
         memcpy(self->peerBda, param->connect.remote_bda, sizeof(esp_bd_addr_t));
+        self->updateStatusConnected();
+        esp_ble_gap_read_rssi(param->connect.remote_bda); // trigger RSSI read
+        if (self->rssiTimer) esp_timer_start_periodic(self->rssiTimer, 5000000ULL); // 5s
     } break;
     case ESP_GATTS_DISCONNECT_EVT: {
         self->connected = false;
         self->notifyFromNumEnabled = false;
         self->notifyLogEnabled = false;
         self->notifyBatteryEnabled = false;
+        self->updateStatusDisconnected();
+        if (self->rssiTimer) esp_timer_stop(self->rssiTimer);
         esp_ble_gap_start_advertising(nullptr);
     } break;
     case ESP_GATTS_WRITE_EVT: {
@@ -367,6 +487,15 @@ void BluedroidBluetooth::gattsEventHandler(esp_gatts_cb_event_t event, esp_gatt_
                         }
                     }
                 }
+            }
+            else if (handle == self->fromNumCccdHandle) {
+                if (param->write.len >= 2) self->notifyFromNumEnabled = (param->write.value[0] & 0x01) != 0;
+            }
+            else if (handle == self->logRadioCccdHandle) {
+                if (param->write.len >= 2) self->notifyLogEnabled = (param->write.value[0] & 0x01) != 0;
+            }
+            else if (handle == self->batteryLevelCccdHandle) {
+                if (param->write.len >= 2) self->notifyBatteryEnabled = (param->write.value[0] & 0x01) != 0;
             }
         }
     } break;
@@ -401,7 +530,49 @@ void BluedroidBluetooth::gattsEventHandler(esp_gatts_cb_event_t event, esp_gatt_
 
 void BluedroidBluetooth::startPeriodicSyncScan()
 {
-    // Placeholder: integrate existing periodic sync code if needed
+    // Placeholder: could migrate periodic sync code here (currently remains in main when demo flag enabled)
+}
+
+#ifdef USE_PERIODIC_ADV_SYNC_DEMO
+void BluedroidBluetooth::enablePeriodicAdvSyncDemo()
+{
+    // Start extended scanning for periodic adv sync demo
+    esp_ble_gap_set_ext_scan_params(&pasExtScanParams);
+    esp_ble_gap_start_ext_scan(0, 0);
+    LOG_INFO("Extended scan started (demo mode)");
+}
+
+void BluedroidBluetooth::pasValidateConfig(uint16_t interval_1_25ms)
+{
+    if (!interval_1_25ms) return;
+    uint32_t ms = interval_1_25ms * 125 / 100;
+    uint32_t effective = ms * (pasPeriodicParams.skip + 1);
+    uint32_t timeout_ms = pasPeriodicParams.sync_timeout * 10;
+    if (effective >= timeout_ms) {
+        LOG_WARN("Periodic sync risk: effective=%u ms >= timeout=%u ms", effective, timeout_ms);
+    } else {
+        LOG_INFO("Periodic sync ok: interval=%u ms effective=%u ms timeout=%u ms", ms, effective, timeout_ms);
+    }
+}
+#endif
+
+void BluedroidBluetooth::updateStatusPairing(uint32_t passkey)
+{
+    if (!bluetoothStatus) return;
+    meshtastic::BluetoothStatus newStatus(std::to_string(passkey));
+    bluetoothStatus->updateStatus(&newStatus);
+}
+void BluedroidBluetooth::updateStatusConnected()
+{
+    if (!bluetoothStatus) return;
+    meshtastic::BluetoothStatus newStatus(meshtastic::BluetoothStatus::ConnectionState::CONNECTED);
+    bluetoothStatus->updateStatus(&newStatus);
+}
+void BluedroidBluetooth::updateStatusDisconnected()
+{
+    if (!bluetoothStatus) return;
+    meshtastic::BluetoothStatus newStatus(meshtastic::BluetoothStatus::ConnectionState::DISCONNECTED);
+    bluetoothStatus->updateStatus(&newStatus);
 }
 
 // Global free function used elsewhere

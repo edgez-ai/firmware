@@ -11,6 +11,14 @@
 #include <ctype.h> // for better whitespace handling
 #if defined(ARCH_ESP32) && !MESHTASTIC_EXCLUDE_BLUETOOTH
 #include "BleOta.h"
+#ifdef USE_BLUEDROID_BLE
+#include "bluedroid/BluedroidBluetooth.h"
+#else
+#ifdef USE_BLUEDROID_BLE
+class BluedroidBluetooth; // fallback forward decl
+extern BluedroidBluetooth *bluedroidBluetooth;
+#endif
+#endif
 #endif
 #if defined(ARCH_ESP32) && !MESHTASTIC_EXCLUDE_WIFI
 #include "WiFiOTA.h"
@@ -1199,10 +1207,17 @@ void AdminModule::handleGetDeviceConnectionStatus(const meshtastic_MeshPacket &r
     conn.has_bluetooth = true;
     conn.bluetooth.pin = config.bluetooth.fixed_pin;
 #ifdef ARCH_ESP32
+#ifdef USE_BLUEDROID_BLE
+    if (config.bluetooth.enabled && bluedroidBluetooth) {
+        conn.bluetooth.is_connected = bluedroidBluetooth->isConnected();
+        conn.bluetooth.rssi = bluedroidBluetooth->getRssi();
+    }
+#else
     if (config.bluetooth.enabled && nimbleBluetooth) {
         conn.bluetooth.is_connected = nimbleBluetooth->isConnected();
         conn.bluetooth.rssi = nimbleBluetooth->getRssi();
     }
+#endif
 #elif defined(ARCH_NRF52)
     if (config.bluetooth.enabled && nrf52Bluetooth) {
         conn.bluetooth.is_connected = nrf52Bluetooth->isConnected();

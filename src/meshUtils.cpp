@@ -107,3 +107,11 @@ const std::string vformat(const char *const zcFormat, ...)
     va_end(vaArgs);
     return std::string(zc.data(), iLen);
 }
+
+void put_le32(uint8_t *dst, unsigned int v)
+{
+    dst[0] = (uint8_t)(v & 0xFF);
+    dst[1] = (uint8_t)((v >> 8) & 0xFF);
+    dst[2] = (uint8_t)((v >> 16) & 0xFF);
+    dst[3] = (uint8_t)((v >> 24) & 0xFF);
+}
