@@ -9,20 +9,14 @@
 #include <esp_gatts_api.h>
 #include <esp_bt_main.h>
 #include <esp_gatt_common_api.h>
-#include <esp_timer.h>
-#include <atomic>
-#include <mutex>
-#include <vector>
 
 #include "BluetoothCommon.h"
 #include "mesh/PhoneAPI.h"
-#include "PowerFSM.h"
 
 // Forward declarations for global helpers already existing in codebase (definitions come via main.cpp and other units)
 extern const char *getDeviceName();
-extern void put_le32(uint8_t *dst, uint32_t v);
 
-// Map characteristic roles to indices for handle lookup
+// Map characteristic roles to indices for handle lookup - kept for compatibility
 enum class MeshCharId : uint8_t {
     ToRadio = 0,
     FromRadio,
@@ -36,84 +30,53 @@ class BluedroidBluetooth : public BluetoothApi
 {
   public:
     BluedroidBluetooth() = default;
-    void setup() override;          // Initialize controller + GATT server + advertising
-    void shutdown() override;       // Stop advertising (light shutdown)
+    void setup() override;          // Initialize controller for scanning only
+    void shutdown() override;       // Dummy - do nothing
     void deinit();                  // Full deinit (requires reboot to restore)
-    void clearBonds() override;     // Delete all bonded devices
-    bool isConnected() override;    // Any central connected?
+    void clearBonds() override;     // Dummy - do nothing
+    bool isConnected() override;    // Always false
     bool isActive();                // Has setup run
-  int getRssi() override;         // Last cached RSSI (actively requested)
-    void sendLog(const uint8_t *logMessage, size_t length);
-    void notifyFromNum(uint32_t fromNum);
-    void updateBattery(uint8_t level);
+    int getRssi() override;         // Always 0
+    void sendLog(const uint8_t *logMessage, size_t length); // Dummy
+    void notifyFromNum(uint32_t fromNum); // Dummy
+    void updateBattery(uint8_t level); // Dummy
 
-  void enablePeriodicAdvSyncDemo();
+    void enablePeriodicAdvSyncDemo();
 
   private:
     // Internal helpers
     bool initController();
-    void initSecurity();
-    void createServices();
-    void startAdvertising();
+    void initSecurity(); // Dummy
+    void createServices(); // Dummy
+    void startAdvertising(); // Dummy
     static void gapEventHandler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
     static void gattsEventHandler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param);
     static BluedroidBluetooth *instance; // singleton style pointer used from static callbacks
 
-    // State
-    esp_gatt_if_t gattsIf = ESP_GATT_IF_NONE;
+    // Minimal state
     bool servicesCreated = false;
-    bool advertising = false;
-    std::atomic<bool> connected{false};
-    uint16_t connId = ESP_GATT_IF_NONE;
-    esp_bd_addr_t peerBda{};
-  bool notifyFromNumEnabled = false;
-  bool notifyLogEnabled = false;
-  bool notifyBatteryEnabled = false;
-  int lastRssi = 0;
-  esp_timer_handle_t rssiTimer = nullptr;
     bool isDeInited = false;
 
-    // Characteristic handles (value handles) after creation
-    uint16_t meshServiceHandle = 0;
-    uint16_t batteryServiceHandle = 0;
-    uint16_t charHandles[(size_t)MeshCharId::COUNT] = {0};
-    uint16_t fromNumCccdHandle = 0;
-    uint16_t logRadioCccdHandle = 0;
-    uint16_t batteryLevelCccdHandle = 0;
-
-    // Buffer for last ToRadio to suppress duplicates
-    uint8_t lastToRadio[512] = {0};
-    size_t lastToRadioLen = 0;
-
-    // PhoneAPI bridge (mirrors NimBLE implementation pattern)
+    // PhoneAPI bridge - kept for compatibility but not used
     class BluetoothPhoneAPIImpl : public PhoneAPI, public concurrency::OSThread {
       public:
-        BluetoothPhoneAPIImpl() : concurrency::OSThread("BluedroidBluetooth") { queue.reserve(3); }
-        std::vector<std::vector<uint8_t>> queue; // small ring buffer like usage
-        std::mutex mtx;
-        uint8_t queued = 0;
-        bool hasFromRadio = false;
-        uint8_t fromRadioBytes[meshtastic_FromRadio_size] = {0};
-        size_t numBytes = 0;
-        bool hasChecked = false;
-        bool phoneWants = false;
-
+        BluetoothPhoneAPIImpl() : concurrency::OSThread("BluedroidBluetooth") { }
       protected:
         int32_t runOnce() override;
         void onNowHasData(uint32_t fromRadioNum) override;
       public:
-        bool checkIsConnected() override { return BluedroidBluetooth::instance && BluedroidBluetooth::instance->isConnected(); }
+        bool checkIsConnected() override { return false; }
     };
 
     BluetoothPhoneAPIImpl *phoneAPI = nullptr;
 
-    // Security / pairing state
+    // Security / pairing state - dummy
     static bool passkeyShowing;
     static uint32_t currentPasskey;
-  void showPasskey(uint32_t passkey);
-  void updateStatusPairing(uint32_t passkey);
-  void updateStatusConnected();
-  void updateStatusDisconnected();
+    void showPasskey(uint32_t passkey);
+    void updateStatusPairing(uint32_t passkey);
+    void updateStatusConnected();
+    void updateStatusDisconnected();
 
 #ifdef USE_PERIODIC_ADV_SYNC_DEMO
   // Periodic advertising sync demo state
