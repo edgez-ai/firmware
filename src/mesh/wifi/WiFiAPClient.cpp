@@ -1,14 +1,29 @@
 #include "configuration.h"
 #if HAS_WIFI
+// Core includes
 #include "NodeDB.h"
 #include "RTC.h"
 #include "concurrency/Periodic.h"
 #include "mesh/wifi/WiFiAPClient.h"
-
+// Application includes
 #include "main.h"
 #include "mesh/api/WiFiServerAPI.h"
 #include "target_specific.h"
+
+#if defined(ESP_PLATFORM)
+// Use native ESP-IDF (no Arduino WiFi layer)
+#include <esp_event.h>
+#include <esp_mac.h>
+#include <esp_wifi.h>
+#include <esp_netif.h>
+#include <esp_system.h>
+#include <nvs_flash.h>
+#include <lwip/err.h>
+#include <lwip/sys.h>
+#include <string.h>
+#else
 #include <WiFi.h>
+#endif
 
 #if HAS_ETHERNET && defined(USE_WS5500)
 #include <ETHClass2.h>
@@ -16,13 +31,11 @@
 #endif // HAS_ETHERNET
 
 #include <WiFiUdp.h>
-#ifdef ARCH_ESP32
+#if defined(ESP_PLATFORM)
 #if !MESHTASTIC_EXCLUDE_WEBSERVER
 #include "mesh/http/WebServer.h"
 #endif
-#include <ESPmDNS.h>
-#include <esp_wifi.h>
-static void WiFiEvent(WiFiEvent_t event);
+#include <ESPmDNS.h> // We still leverage Arduino mDNS component if available; otherwise replace later.
 #elif defined(ARCH_RP2040)
 #include <SimpleMDNS.h>
 #endif
@@ -48,21 +61,29 @@ uint8_t wifiDisconnectReason = 0;
 // Stores our hostname
 char ourHost[16];
 
-// To replace blocking wifi connect delay with a non-blocking sleep
-static unsigned long wifiReconnectStartMillis = 0;
-static bool wifiReconnectPending = false;
+#if defined(ESP_PLATFORM)
+// Native ESP-IDF path: state and externs
+static bool s_wifi_connected = false;
+static esp_netif_t *s_sta_netif = nullptr;
+// Externs expected by other modules but not used in native ESP32 path
+bool needReconnect = false;
+concurrency::Periodic *wifiReconnect = nullptr;
+#endif
 
 bool APStartupComplete = 0;
-
 unsigned long lastrun_ntp = 0;
-
-bool needReconnect = true;   // If we create our reconnector, run it once at the beginning
-bool isReconnecting = false; // If we are currently reconnecting
 
 WiFiUDP syslogClient;
 Syslog syslog(syslogClient);
 
-Periodic *wifiReconnect;
+#if defined(ARCH_RP2040)
+// RP2040 Arduino-style WiFi variables
+bool needReconnect = true;
+bool isReconnecting = false;
+bool wifiReconnectPending = false;
+unsigned long wifiReconnectStartMillis = 0;
+concurrency::Periodic *wifiReconnect = nullptr;
+#endif
 
 #ifdef USE_WS5500
 // Startup Ethernet
@@ -151,6 +172,7 @@ static void onNetworkConnected()
 #endif
 }
 
+#if defined(ARCH_RP2040)
 static int32_t reconnectWiFi()
 {
     const char *wifiName = config.network.wifi_ssid;
@@ -165,11 +187,7 @@ static int32_t reconnectWiFi()
         isReconnecting = true;
 
         // Make sure we clear old connection credentials
-#ifdef ARCH_ESP32
-        WiFi.disconnect(false, true);
-#elif defined(ARCH_RP2040)
-        WiFi.disconnect(false);
-#endif
+    WiFi.disconnect(false);
         LOG_INFO("Reconnecting to WiFi access point %s", wifiName);
 
         // Start the non-blocking wait for 5 seconds
@@ -217,14 +235,10 @@ static int32_t reconnectWiFi()
 #endif
 
     if (config.network.wifi_enabled && !WiFi.isConnected()) {
-#ifdef ARCH_RP2040 // (ESP32 handles this in WiFiEvent)
-        needReconnect = APStartupComplete;
-#endif
+    needReconnect = APStartupComplete;
         return 1000; // check once per second
     } else {
-#ifdef ARCH_RP2040
-        onNetworkConnected(); // will only do anything once
-#endif
+    onNetworkConnected(); // will only do anything once
         return 300000; // every 5 minutes
     }
 }
@@ -273,12 +287,11 @@ bool initWifi()
         const char *wifiName = config.network.wifi_ssid;
         const char *wifiPsw = config.network.wifi_psk;
 
-#ifndef ARCH_RP2040
+// RP2040 path still can reuse SSL cert creation if available
 #if !MESHTASTIC_EXCLUDE_WEBSERVER
-        createSSLCert(); // For WebServer
+    createSSLCert(); // For WebServer
 #endif
-        WiFi.persistent(false); // Disable flash storage for WiFi credentials
-#endif
+    WiFi.persistent(false); // Disable flash storage for WiFi credentials
         if (!*wifiPsw) // Treat empty password as no password
             wifiPsw = NULL;
 
@@ -292,37 +305,12 @@ bool initWifi()
 
             if (config.network.address_mode == meshtastic_Config_NetworkConfig_AddressMode_STATIC &&
                 config.network.ipv4_config.ip != 0) {
-#ifdef ARCH_ESP32
-                WiFi.config(config.network.ipv4_config.ip, config.network.ipv4_config.gateway, config.network.ipv4_config.subnet,
-                            config.network.ipv4_config.dns);
-#elif defined(ARCH_RP2040)
+                // Static IP for RP2040
                 WiFi.config(config.network.ipv4_config.ip, config.network.ipv4_config.dns, config.network.ipv4_config.gateway,
                             config.network.ipv4_config.subnet);
-#endif
             }
-#ifdef ARCH_ESP32
-            WiFi.onEvent(WiFiEvent);
             WiFi.setAutoReconnect(true);
             WiFi.setSleep(false);
-
-            // This is needed to improve performance.
-            esp_wifi_set_ps(WIFI_PS_NONE); // Disable radio power saving
-
-            WiFi.onEvent(
-                [](WiFiEvent_t event, WiFiEventInfo_t info) {
-                    LOG_WARN("WiFi lost connection. Reason: %d", info.wifi_sta_disconnected.reason);
-
-                    /*
-                        If we are disconnected from the AP for some reason,
-                        save the error code.
-
-                        For a reference to the codes:
-                            https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/wifi.html#wi-fi-reason-code
-                    */
-                    wifiDisconnectReason = info.wifi_sta_disconnected.reason;
-                },
-                WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
-#endif
             LOG_DEBUG("JOINING WIFI soon: ssid=%s", wifiName);
             wifiReconnect = new Periodic("WifiConnect", reconnectWiFi);
         }
@@ -333,185 +321,121 @@ bool initWifi()
     }
 }
 
-#ifdef ARCH_ESP32
-// Called by the Espressif SDK to
-static void WiFiEvent(WiFiEvent_t event)
-{
-    LOG_DEBUG("Network-Event %d: ", event);
+#endif // ARCH_RP2040 (Arduino style path)
 
-    switch (event) {
-    case ARDUINO_EVENT_WIFI_READY:
-        LOG_INFO("WiFi interface ready");
-        break;
-    case ARDUINO_EVENT_WIFI_SCAN_DONE:
-        LOG_INFO("Completed scan for access points");
-        break;
-    case ARDUINO_EVENT_WIFI_STA_START:
+// ESP32 native implementation below
+#if defined(ESP_PLATFORM)
+
+static void esp32_on_got_ip(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
+{
+    ip_event_got_ip_t *event = (ip_event_got_ip_t *)event_data;
+    LOG_INFO("Obtained IP address: %s", ip4addr_ntoa((const ip4_addr_t *)&event->ip_info.ip));
+    s_wifi_connected = true;
+    onNetworkConnected();
+    startLwM2MClient();
+}
+
+static void esp32_on_wifi_event(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data)
+{
+    switch (event_id) {
+    case WIFI_EVENT_STA_START:
         LOG_INFO("WiFi station started");
         break;
-    case ARDUINO_EVENT_WIFI_STA_STOP:
-        LOG_INFO("WiFi station stopped");
-        syslog.disable();
-        break;
-    case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+    case WIFI_EVENT_STA_CONNECTED:
         LOG_INFO("Connected to access point");
-#ifdef WIFI_LED
-        digitalWrite(WIFI_LED, HIGH);
-#endif
-#ifdef ARCH_ESP32
-    startLwM2MClient();
-#endif
         break;
-    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
-        LOG_INFO("Disconnected from WiFi access point");
-#ifdef WIFI_LED
-        digitalWrite(WIFI_LED, LOW);
-#endif
-        if (!isReconnecting) {
-            WiFi.disconnect(false, true);
-            syslog.disable();
-            needReconnect = true;
-            wifiReconnect->setIntervalFromNow(1000);
-        }
-        break;
-    case ARDUINO_EVENT_WIFI_STA_AUTHMODE_CHANGE:
-        LOG_INFO("Authentication mode of access point has changed");
-        break;
-    case ARDUINO_EVENT_WIFI_STA_GOT_IP:
-        LOG_INFO("Obtained IP address: %s", WiFi.localIP().toString().c_str());
-        onNetworkConnected();
-        break;
-    case ARDUINO_EVENT_WIFI_STA_GOT_IP6:
-#if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
-        LOG_INFO("Obtained Local IP6 address: %s", WiFi.linkLocalIPv6().toString().c_str());
-        LOG_INFO("Obtained GlobalIP6 address: %s", WiFi.globalIPv6().toString().c_str());
-#else
-        LOG_INFO("Obtained IP6 address: %s", WiFi.localIPv6().toString().c_str());
-#endif
-        break;
-    case ARDUINO_EVENT_WIFI_STA_LOST_IP:
-        LOG_INFO("Lost IP address and IP address is reset to 0");
-        if (!isReconnecting) {
-            WiFi.disconnect(false, true);
-            syslog.disable();
-            needReconnect = true;
-            wifiReconnect->setIntervalFromNow(1000);
-        }
-        break;
-    case ARDUINO_EVENT_WPS_ER_SUCCESS:
-        LOG_INFO("WiFi Protected Setup (WPS): succeeded in enrollee mode");
-        break;
-    case ARDUINO_EVENT_WPS_ER_FAILED:
-        LOG_INFO("WiFi Protected Setup (WPS): failed in enrollee mode");
-        break;
-    case ARDUINO_EVENT_WPS_ER_TIMEOUT:
-        LOG_INFO("WiFi Protected Setup (WPS): timeout in enrollee mode");
-        break;
-    case ARDUINO_EVENT_WPS_ER_PIN:
-        LOG_INFO("WiFi Protected Setup (WPS): pin code in enrollee mode");
-        break;
-    case ARDUINO_EVENT_WPS_ER_PBC_OVERLAP:
-        LOG_INFO("WiFi Protected Setup (WPS): push button overlap in enrollee mode");
-        break;
-    case ARDUINO_EVENT_WIFI_AP_START:
-        LOG_INFO("WiFi access point started");
-#ifdef WIFI_LED
-        digitalWrite(WIFI_LED, HIGH);
-#endif
-        break;
-    case ARDUINO_EVENT_WIFI_AP_STOP:
-        LOG_INFO("WiFi access point stopped");
-#ifdef WIFI_LED
-        digitalWrite(WIFI_LED, LOW);
-#endif
-        break;
-    case ARDUINO_EVENT_WIFI_AP_STACONNECTED:
-        LOG_INFO("Client connected");
-        break;
-    case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED:
-        LOG_INFO("Client disconnected");
-        break;
-    case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED:
-        LOG_INFO("Assigned IP address to client");
-        break;
-    case ARDUINO_EVENT_WIFI_AP_PROBEREQRECVED:
-        LOG_INFO("Received probe request");
-        break;
-    case ARDUINO_EVENT_WIFI_AP_GOT_IP6:
-        LOG_INFO("IPv6 is preferred");
-        break;
-    case ARDUINO_EVENT_WIFI_FTM_REPORT:
-        LOG_INFO("Fast Transition Management report");
-        break;
-    case ARDUINO_EVENT_ETH_START:
-        LOG_INFO("Ethernet started");
-        break;
-    case ARDUINO_EVENT_ETH_STOP:
-        syslog.disable();
-        LOG_INFO("Ethernet stopped");
-        break;
-    case ARDUINO_EVENT_ETH_CONNECTED:
-        LOG_INFO("Ethernet connected");
-        break;
-    case ARDUINO_EVENT_ETH_DISCONNECTED:
-        syslog.disable();
-        LOG_INFO("Ethernet disconnected");
-        break;
-    case ARDUINO_EVENT_ETH_GOT_IP:
-#ifdef USE_WS5500
-        LOG_INFO("Obtained IP address: %s, %u Mbps, %s", ETH.localIP().toString().c_str(), ETH.linkSpeed(),
-                 ETH.fullDuplex() ? "FULL_DUPLEX" : "HALF_DUPLEX");
-        onNetworkConnected();
-#endif
-        break;
-    case ARDUINO_EVENT_ETH_GOT_IP6:
-#ifdef USE_WS5500
-#if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
-        LOG_INFO("Obtained Local IP6 address: %s", ETH.linkLocalIPv6().toString().c_str());
-        LOG_INFO("Obtained GlobalIP6 address: %s", ETH.globalIPv6().toString().c_str());
-#else
-        LOG_INFO("Obtained IP6 address: %s", ETH.localIPv6().toString().c_str());
-#endif
-#endif
-        break;
-    case ARDUINO_EVENT_SC_SCAN_DONE:
-        LOG_INFO("SmartConfig: Scan done");
-        break;
-    case ARDUINO_EVENT_SC_FOUND_CHANNEL:
-        LOG_INFO("SmartConfig: Found channel");
-        break;
-    case ARDUINO_EVENT_SC_GOT_SSID_PSWD:
-        LOG_INFO("SmartConfig: Got SSID and password");
-        break;
-    case ARDUINO_EVENT_SC_SEND_ACK_DONE:
-        LOG_INFO("SmartConfig: Send ACK done");
-        break;
-    case ARDUINO_EVENT_PROV_INIT:
-        LOG_INFO("Provision Init");
-        break;
-    case ARDUINO_EVENT_PROV_DEINIT:
-        LOG_INFO("Provision Stopped");
-        break;
-    case ARDUINO_EVENT_PROV_START:
-        LOG_INFO("Provision Started");
-        break;
-    case ARDUINO_EVENT_PROV_END:
-        LOG_INFO("Provision End");
-        break;
-    case ARDUINO_EVENT_PROV_CRED_RECV:
-        LOG_INFO("Provision Credentials received");
-        break;
-    case ARDUINO_EVENT_PROV_CRED_FAIL:
-        LOG_INFO("Provision Credentials failed");
-        break;
-    case ARDUINO_EVENT_PROV_CRED_SUCCESS:
-        LOG_INFO("Provision Credentials success");
-        break;
+    case WIFI_EVENT_STA_DISCONNECTED: {
+        wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)event_data;
+        wifiDisconnectReason = disc->reason;
+        LOG_WARN("WiFi disconnected (reason=%d), retrying...", disc->reason);
+        s_wifi_connected = false;
+        esp_wifi_connect();
+        break; }
     default:
         break;
     }
 }
-#endif
+
+bool initWifi()
+{
+    if (!(config.network.wifi_enabled && config.network.wifi_ssid[0])) {
+        LOG_INFO("Not using WIFI");
+        return false;
+    }
+
+    // Assume Arduino core already initialized NVS; skip manual init
+
+    esp_err_t err = esp_netif_init();
+    if (err != ESP_OK) {
+        LOG_ERROR("esp_netif_init failed %d", err);
+        return false;
+    }
+    static bool loopCreated = false;
+    if (!loopCreated) {
+        err = esp_event_loop_create_default();
+        if (err != ESP_ERR_INVALID_STATE && err != ESP_OK) {
+            LOG_ERROR("event loop create failed %d", err);
+            return false;
+        }
+        loopCreated = true;
+    }
+    if (!s_sta_netif) {
+        s_sta_netif = esp_netif_create_default_wifi_sta();
+    }
+
+    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
+    err = esp_wifi_init(&cfg);
+    if (err != ESP_OK) {
+        LOG_ERROR("esp_wifi_init failed %d", err);
+        return false;
+    }
+
+    esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &esp32_on_wifi_event, NULL, NULL);
+    esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &esp32_on_got_ip, NULL, NULL);
+
+    wifi_config_t wifi_config = {};
+    strncpy((char *)wifi_config.sta.ssid, config.network.wifi_ssid, sizeof(wifi_config.sta.ssid));
+    strncpy((char *)wifi_config.sta.password, config.network.wifi_psk, sizeof(wifi_config.sta.password));
+    wifi_config.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK; // Accept WPA2 or better
+    wifi_config.sta.pmf_cfg.capable = true;
+    wifi_config.sta.pmf_cfg.required = false;
+
+    err = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (err != ESP_OK) {
+        LOG_ERROR("esp_wifi_set_mode failed %d", err);
+        return false;
+    }
+    err = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
+    if (err != ESP_OK) {
+        LOG_ERROR("esp_wifi_set_config failed %d", err);
+        return false;
+    }
+    // Disable power save for performance parity with previous code
+    esp_wifi_set_ps(WIFI_PS_NONE);
+
+    err = esp_wifi_start();
+    if (err != ESP_OK) {
+        LOG_ERROR("esp_wifi_start failed %d", err);
+        return false;
+    }
+
+    LOG_INFO("WiFi STA start, connecting to %s", config.network.wifi_ssid);
+    esp_wifi_connect();
+    return true; // We'll get events asynchronously
+}
+
+void deinitWifi()
+{
+    LOG_INFO("WiFi deinit");
+    esp_wifi_stop();
+    esp_wifi_deinit();
+}
+
+bool isWifiAvailable()
+{
+    return s_wifi_connected; // Reflect actual connection state
+}
+#endif // ESP_PLATFORM
 
 uint8_t getWifiDisconnectReason()
 {
