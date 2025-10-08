@@ -44,12 +44,17 @@ PCA9557 io(0x18, &Wire);
 
 #ifdef ARCH_ESP32
 #include "freertosinc.h"
+#include "MemoryDebug.h"
 #if !MESHTASTIC_EXCLUDE_WEBSERVER
 #include "mesh/http/WebServer.h"
 #endif
 #if !MESHTASTIC_EXCLUDE_BLUETOOTH
+#ifdef USE_BLUEDROID_BLE
+#include "bluedroid/BluedroidBluetooth.h"
+#else
 #include "nimble/NimbleBluetooth.h"
 NimbleBluetooth *nimbleBluetooth = nullptr;
+#endif
 #endif
 #endif
 
@@ -302,6 +307,10 @@ void printInfo()
 #ifndef PIO_UNIT_TESTING
 void setup()
 {
+#ifdef ARCH_ESP32
+    // Print memory at the very start of setup
+    printMemoryInfo("BOOT - Start of setup()");
+#endif
 
 #if defined(PIN_POWER_EN)
     pinMode(PIN_POWER_EN, OUTPUT);

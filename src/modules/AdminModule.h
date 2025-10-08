@@ -2,9 +2,6 @@
 
 #pragma once
 #include "ProtobufModule.h"
-#if HAS_WIFI
-#include "mesh/wifi/WiFiAPClient.h"
-#endif
 
 /**
  * Datatype passed to Observers by AdminModule, to allow external handling of admin messages

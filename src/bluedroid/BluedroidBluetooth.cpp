@@ -10,6 +10,7 @@
 #include "sleep.h"
 #include "PowerFSM.h"
 #include "main.h"
+#include "MemoryDebug.h"
 
 #include <esp_bt.h>
 #include <esp_bt_main.h>
@@ -74,34 +75,65 @@ void BluedroidBluetooth::BluetoothPhoneAPIImpl::onNowHasData(uint32_t fromRadioN
     }
 }
 
-void BluedroidBluetooth::initController()
+bool BluedroidBluetooth::initController()
 {
+    // Print memory before BT init
+    printMemoryInfo("Before BT Init");
+    
     // Release classic BT memory to save RAM
     esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
+    
+    printMemorySummary("After Classic BT Release");
+    
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    LOG_INFO("BT controller config size: %u bytes", sizeof(bt_cfg));
+    
+    // Check if we have enough memory (BT controller needs ~30-40KB)
+    if (!checkMemoryAvailable(40000, "BT Controller")) {
+        LOG_ERROR("Insufficient memory for BT controller initialization");
+        return false;
+    }
+    
     esp_err_t ret = esp_bt_controller_init(&bt_cfg);
     if (ret) {
         LOG_ERROR("BT controller init failed %s", esp_err_to_name(ret));
-        return;
+        printMemoryInfo("At BT Init Failure");
+        return false;
     }
+    
+    printMemorySummary("After BT Controller Init");
+    
     ret = esp_bt_controller_enable(ESP_BT_MODE_BLE);
     if (ret) {
         LOG_ERROR("BT controller enable failed %s", esp_err_to_name(ret));
-        return;
+        printMemorySummary("At BT Enable Failure");
+        return false;
     }
+    
+    printMemorySummary("After BT Controller Enable");
+    
     ret = esp_bluedroid_init();
     if (ret) {
         LOG_ERROR("Bluedroid init failed %s", esp_err_to_name(ret));
-        return;
+        printMemorySummary("At Bluedroid Init Failure");
+        return false;
     }
+    
+    printMemorySummary("After Bluedroid Init");
+    
     ret = esp_bluedroid_enable();
     if (ret) {
         LOG_ERROR("Bluedroid enable failed %s", esp_err_to_name(ret));
-        return;
+        printMemorySummary("At Bluedroid Enable Failure");
+        return false;
     }
+    
+    printMemoryInfo("BT Initialization Complete");
+    
     esp_ble_gap_register_callback(gapEventHandler);
     esp_ble_gatts_register_callback(gattsEventHandler);
     esp_ble_gatts_app_register(0x55); // arbitrary app id
+    return true;
 }
 
 void BluedroidBluetooth::initSecurity()
@@ -257,7 +289,10 @@ void BluedroidBluetooth::setup()
 {
     if (servicesCreated) return;
     instance = this;
-    initController();
+    if (!initController()) {
+        LOG_ERROR("BT controller initialization failed, aborting setup");
+        return;
+    }
     initSecurity();
     // Request larger MTU for log characteristic
     esp_ble_gatt_set_local_mtu(517);
@@ -528,10 +563,6 @@ void BluedroidBluetooth::gattsEventHandler(esp_gatts_cb_event_t event, esp_gatt_
     }
 }
 
-void BluedroidBluetooth::startPeriodicSyncScan()
-{
-    // Placeholder: could migrate periodic sync code here (currently remains in main when demo flag enabled)
-}
 
 #ifdef USE_PERIODIC_ADV_SYNC_DEMO
 void BluedroidBluetooth::enablePeriodicAdvSyncDemo()

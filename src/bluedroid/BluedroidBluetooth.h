@@ -47,13 +47,11 @@ class BluedroidBluetooth : public BluetoothApi
     void notifyFromNum(uint32_t fromNum);
     void updateBattery(uint8_t level);
 
-    // Periodic advertising sync demo integration (optional)
-    void startPeriodicSyncScan();
   void enablePeriodicAdvSyncDemo();
 
   private:
     // Internal helpers
-    void initController();
+    bool initController();
     void initSecurity();
     void createServices();
     void startAdvertising();

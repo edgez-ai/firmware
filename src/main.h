@@ -11,9 +11,13 @@
 #include "mesh/generated/meshtastic/telemetry.pb.h"
 #include <SPI.h>
 #include <map>
-#if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2)
+#if defined(ARCH_ESP32) && !defined(CONFIG_IDF_TARGET_ESP32S2) && !defined(USE_BLUEDROID_BLE)
 #include "nimble/NimbleBluetooth.h"
 extern NimbleBluetooth *nimbleBluetooth;
+#endif
+#ifdef USE_BLUEDROID_BLE
+#include "bluedroid/BluedroidBluetooth.h"
+extern BluedroidBluetooth *bluedroidBluetooth;
 #endif
 #ifdef ARCH_NRF52
 #include "NRF52Bluetooth.h"

@@ -3,6 +3,7 @@
 #include "configuration.h"
 #include "esp_task_wdt.h"
 #include "main.h"
+#include "MemoryDebug.h"
 
 #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
 #include "BleOta.h"
@@ -32,10 +33,13 @@ extern void loadSerialNumber();
 #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
 void setBluetoothEnable(bool enable)
 {
+    LOG_INFO("setBluetoothEnable called: enable=%d, config.enabled=%d", enable, config.bluetooth.enabled);
+    printMemoryInfo("Before BT Setup");
+    
 #ifdef USE_WS5500
     if ((config.bluetooth.enabled == true) && (config.network.wifi_enabled == false))
 #elif HAS_WIFI
-    if (!isWifiAvailable() && config.bluetooth.enabled == true)
+    if (config.bluetooth.enabled == true)
 #else
     if (config.bluetooth.enabled == true)
 #endif

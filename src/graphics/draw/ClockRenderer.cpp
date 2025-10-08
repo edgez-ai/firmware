@@ -14,7 +14,13 @@
 #include "main.h"
 
 #if !MESHTASTIC_EXCLUDE_BLUETOOTH
+#ifdef USE_BLUEDROID_BLE
+#include "bluedroid/BluedroidBluetooth.h"
+#elif defined(ARCH_ESP32) && !defined(USE_BLUEDROID_BLE)
 #include "nimble/NimbleBluetooth.h"
+#elif defined(ARCH_NRF52)
+#include "NRF52Bluetooth.h"
+#endif
 #endif
 
 namespace graphics
@@ -22,6 +28,25 @@ namespace graphics
 
 namespace ClockRenderer
 {
+
+#if defined(T_WATCH_S3)
+static bool isBleConnected()
+{
+#if MESHTASTIC_EXCLUDE_BLUETOOTH
+    return false;
+#else
+#ifdef USE_BLUEDROID_BLE
+    return bluedroidBluetooth && bluedroidBluetooth->isActive() && bluedroidBluetooth->isConnected();
+#elif defined(ARCH_ESP32) && !defined(USE_BLUEDROID_BLE)
+    return nimbleBluetooth && nimbleBluetooth->isConnected();
+#elif defined(ARCH_NRF52)
+    return nrf52Bluetooth && nrf52Bluetooth->isConnected();
+#else
+    return false;
+#endif
+#endif
+}
+#endif
 
 void drawSegmentedDisplayColon(OLEDDisplay *display, int x, int y, float scale)
 {
@@ -195,7 +220,7 @@ void drawDigitalClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int1
     int line = 0;
 
 #ifdef T_WATCH_S3
-    if (nimbleBluetooth && nimbleBluetooth->isConnected()) {
+    if (isBleConnected()) {
         graphics::ClockRenderer::drawBluetoothConnectedIcon(display, display->getWidth() - 18, display->getHeight() - 14);
     }
 #endif
@@ -320,7 +345,7 @@ void drawAnalogClockFrame(OLEDDisplay *display, OLEDDisplayUiState *state, int16
     int line = 0;
 
 #ifdef T_WATCH_S3
-    if (nimbleBluetooth && nimbleBluetooth->isConnected()) {
+    if (isBleConnected()) {
         drawBluetoothConnectedIcon(display, display->getWidth() - 18, display->getHeight() - 14);
     }
 #endif
