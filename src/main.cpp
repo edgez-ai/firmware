@@ -45,9 +45,6 @@ PCA9557 io(0x18, &Wire);
 #ifdef ARCH_ESP32
 #include "freertosinc.h"
 #include "MemoryDebug.h"
-#if !MESHTASTIC_EXCLUDE_WEBSERVER
-#include "mesh/http/WebServer.h"
-#endif
 #if !MESHTASTIC_EXCLUDE_BLUETOOTH
 #ifdef USE_BLUEDROID_BLE
 #include "bluedroid/BluedroidBluetooth.h"
@@ -1464,11 +1461,6 @@ void setup()
 
 #if defined(HAS_TRACKBALL) || (defined(INPUTDRIVER_ENCODER_TYPE) && INPUTDRIVER_ENCODER_TYPE == 2)
     osk_found = true;
-#endif
-
-#if defined(ARCH_ESP32) && !MESHTASTIC_EXCLUDE_WEBSERVER
-    // Start web server thread.
-    webServerThread = new WebServerThread();
 #endif
 
 #ifdef ARCH_PORTDUINO

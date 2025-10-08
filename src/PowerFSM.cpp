@@ -19,10 +19,9 @@
 #include "sleep.h"
 #include "target_specific.h"
 
-// WiFi/UDP/ETH directories have been removed
-// #if HAS_WIFI && !defined(ARCH_PORTDUINO) || defined(MESHTASTIC_EXCLUDE_WIFI)
-// #include "mesh/wifi/WiFiAPClient.h"
-// #endif
+#if HAS_WIFI && !defined(MESHTASTIC_EXCLUDE_WIFI)
+#include "mesh/wifi/WiFiAPClient.h"
+#endif
 
 #ifndef SLEEP_TIME
 #define SLEEP_TIME 30
