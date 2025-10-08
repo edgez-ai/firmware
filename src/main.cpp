@@ -1443,7 +1443,7 @@ void setup()
 #ifndef ARCH_PORTDUINO
 
         // Initialize Wifi
-#if HAS_WIFI
+#if HAS_WIFI && !defined(ARCH_ESP32)
     initWifi();
 #endif
 

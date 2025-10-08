@@ -1,5 +1,5 @@
 #include "configuration.h"
-#if !MESHTASTIC_EXCLUDE_BLUETOOTH
+#if !MESHTASTIC_EXCLUDE_BLUETOOTH && !defined(USE_BLUEDROID_BLE)
 #include "BluetoothCommon.h"
 #include "NimbleBluetooth.h"
 #include "PowerFSM.h"
@@ -471,4 +471,4 @@ void clearNVS()
     ESP.restart();
 #endif
 }
-#endif
+#endif // !MESHTASTIC_EXCLUDE_BLUETOOTH && !USE_BLUEDROID_BLE

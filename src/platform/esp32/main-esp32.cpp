@@ -6,7 +6,11 @@
 
 #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
 #include "BleOta.h"
+#ifdef USE_BLUEDROID_BLE
+#include "bluedroid/BluedroidBluetooth.h"
+#else
 #include "nimble/NimbleBluetooth.h"
+#endif
 #endif
 
 #include <WiFiOTA.h>
@@ -40,10 +44,6 @@ extern void loadSerialNumber();
 #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
 void setBluetoothEnable(bool enable)
 {
-#ifdef USE_PERIODIC_ADV_SYNC_DEMO
-    // In demo mode we use Bluedroid directly; ignore NimBLE toggling.
-    (void)enable;
-#else
 #ifdef USE_WS5500
     if ((config.bluetooth.enabled == true) && (config.network.wifi_enabled == false))
 #elif HAS_WIFI
@@ -52,18 +52,20 @@ void setBluetoothEnable(bool enable)
     if (config.bluetooth.enabled == true)
 #endif
     {
-        if (!nimbleBluetooth) {
-            nimbleBluetooth = new NimbleBluetooth();
+#ifdef USE_BLUEDROID_BLE
+        if (!bluedroidBluetooth) bluedroidBluetooth = new BluedroidBluetooth();
+        if (enable && !bluedroidBluetooth->isActive()) {
+            powerMon->setState(meshtastic_PowerMon_State_BT_On);
+            bluedroidBluetooth->setup();
         }
+#else
+        if (!nimbleBluetooth) nimbleBluetooth = new NimbleBluetooth();
         if (enable && !nimbleBluetooth->isActive()) {
             powerMon->setState(meshtastic_PowerMon_State_BT_On);
             nimbleBluetooth->setup();
         }
-        // For ESP32, no way to recover from bluetooth shutdown without reboot
-        // BLE advertising automatically stops when MCU enters light-sleep(?)
-        // For deep-sleep, shutdown hardware with nimbleBluetooth->deinit(). Requires reboot to reverse
+#endif
     }
-#endif // USE_PERIODIC_ADV_SYNC_DEMO
 }
 #else
 void setBluetoothEnable(bool enable) {}
@@ -162,14 +164,12 @@ void esp32Setup()
     preferences.end();
     LOG_DEBUG("Number of Device Reboots: %d", rebootCounter);
 #if !MESHTASTIC_EXCLUDE_BLUETOOTH
-#ifndef USE_PERIODIC_ADV_SYNC_DEMO
     String BLEOTA = BleOta::getOtaAppVersion();
     if (BLEOTA.isEmpty()) {
         LOG_INFO("No BLE OTA firmware available");
     } else {
         LOG_INFO("BLE OTA firmware version %s", BLEOTA.c_str());
     }
-#endif
 #endif
 #if !MESHTASTIC_EXCLUDE_WIFI
     String version = WiFiOTA::getVersion();
