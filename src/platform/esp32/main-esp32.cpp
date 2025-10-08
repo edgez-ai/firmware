@@ -20,6 +20,18 @@
 #include "sleep.h"
 #include "soc/rtc.h"
 #include "target_specific.h"
+#ifdef USE_PERIODIC_ADV_SYNC_DEMO
+#include <esp_bt.h>
+#include <esp_gap_ble_api.h>
+#include <esp_bt_main.h>
+#include <esp_gatt_common_api.h>
+#include <freertos/semphr.h>
+#ifndef ESP_BLE_ADV_NAME_LEN_MAX
+#define ESP_BLE_ADV_NAME_LEN_MAX 32
+#endif
+// Forward declarations for demo helpers used later in this file
+static void periodicAdvSyncDemoInit();
+#endif
 #include <Preferences.h>
 #include <driver/rtc_io.h>
 #include <nvs.h>
@@ -28,6 +40,10 @@ extern void loadSerialNumber();
 #if !defined(CONFIG_IDF_TARGET_ESP32S2) && !MESHTASTIC_EXCLUDE_BLUETOOTH
 void setBluetoothEnable(bool enable)
 {
+#ifdef USE_PERIODIC_ADV_SYNC_DEMO
+    // In demo mode we use Bluedroid directly; ignore NimBLE toggling.
+    (void)enable;
+#else
 #ifdef USE_WS5500
     if ((config.bluetooth.enabled == true) && (config.network.wifi_enabled == false))
 #elif HAS_WIFI
@@ -47,6 +63,7 @@ void setBluetoothEnable(bool enable)
         // BLE advertising automatically stops when MCU enters light-sleep(?)
         // For deep-sleep, shutdown hardware with nimbleBluetooth->deinit(). Requires reboot to reverse
     }
+#endif // USE_PERIODIC_ADV_SYNC_DEMO
 }
 #else
 void setBluetoothEnable(bool enable) {}
@@ -145,12 +162,14 @@ void esp32Setup()
     preferences.end();
     LOG_DEBUG("Number of Device Reboots: %d", rebootCounter);
 #if !MESHTASTIC_EXCLUDE_BLUETOOTH
+#ifndef USE_PERIODIC_ADV_SYNC_DEMO
     String BLEOTA = BleOta::getOtaAppVersion();
     if (BLEOTA.isEmpty()) {
         LOG_INFO("No BLE OTA firmware available");
     } else {
         LOG_INFO("BLE OTA firmware version %s", BLEOTA.c_str());
     }
+#endif
 #endif
 #if !MESHTASTIC_EXCLUDE_WIFI
     String version = WiFiOTA::getVersion();
@@ -163,6 +182,10 @@ void esp32Setup()
 #endif
 
     // enableModemSleep();
+
+#ifdef USE_PERIODIC_ADV_SYNC_DEMO
+    periodicAdvSyncDemoInit();
+#endif
 
 // Since we are turning on watchdogs rather late in the release schedule, we really don't want to catch any
 // false positives.  The wait-to-sleep timeout for shutting down radios is 30 secs, so pick 45 for now.
@@ -195,6 +218,121 @@ void esp32Loop()
     // for debug printing
     // radio.radioIf.canSleep();
 }
+
+#ifdef USE_PERIODIC_ADV_SYNC_DEMO
+// ================= Periodic Advertising Sync Demo Integration =================
+
+// Lightweight integration of original periodic_sync_demo.c
+// Only compiled when USE_PERIODIC_ADV_SYNC_DEMO is defined.
+
+static const char *PAS_TAG = "PERIODIC_SYNC";
+static SemaphoreHandle_t pas_sem = nullptr;
+static bool pas_periodic_sync = false;
+static char pas_remote_name[ESP_BLE_ADV_NAME_LEN_MAX] = "ESP_EXTENDED_ADV";
+
+// Extended scan params (both uncoded & coded, active scan)
+static esp_ble_ext_scan_params_t pas_ext_scan_params = {
+    .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
+    .filter_policy = BLE_SCAN_FILTER_ALLOW_ALL,
+    .scan_duplicate = BLE_SCAN_DUPLICATE_ENABLE,
+    .cfg_mask = ESP_BLE_GAP_EXT_SCAN_CFG_UNCODE_MASK | ESP_BLE_GAP_EXT_SCAN_CFG_CODE_MASK,
+    .uncoded_cfg = {BLE_SCAN_TYPE_ACTIVE, 160, 80},
+    .coded_cfg   = {BLE_SCAN_TYPE_ACTIVE, 160, 80},
+};
+
+static esp_ble_gap_periodic_adv_sync_params_t pas_periodic_params = {
+    .filter_policy = 0,
+    .sid = 0,
+    .addr_type = BLE_ADDR_TYPE_RANDOM,
+    .skip = 0,
+    .sync_timeout = 800, // 8 s (10 ms units)
+};
+
+static void pas_validate_config(uint16_t interval_1_25ms)
+{
+    if (!interval_1_25ms) return;
+    uint32_t ms = interval_1_25ms * 125 / 100; // integer ~ms
+    uint32_t effective = ms * (pas_periodic_params.skip + 1);
+    uint32_t timeout_ms = pas_periodic_params.sync_timeout * 10;
+    if (effective >= timeout_ms) {
+        ESP_LOGW(PAS_TAG, "Periodic sync risk: effective=%u ms >= timeout=%u ms", effective, timeout_ms);
+    } else {
+        ESP_LOGI(PAS_TAG, "Periodic sync ok: interval=%u ms effective=%u ms timeout=%u ms", ms, effective, timeout_ms);
+    }
+}
+
+static void pas_gap_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
+{
+    switch (event) {
+    case ESP_GAP_BLE_SET_EXT_SCAN_PARAMS_COMPLETE_EVT:
+        ESP_LOGI(PAS_TAG, "Set ext scan params status=%d", param->set_ext_scan_params.status);
+        if (pas_sem) xSemaphoreGive(pas_sem);
+        break;
+    case ESP_GAP_BLE_EXT_SCAN_START_COMPLETE_EVT:
+        ESP_LOGI(PAS_TAG, "Ext scan start status=%d", param->ext_scan_start.status);
+        if (pas_sem) xSemaphoreGive(pas_sem);
+        break;
+    case ESP_GAP_BLE_PERIODIC_ADV_SYNC_LOST_EVT:
+        ESP_LOGW(PAS_TAG, "Periodic adv sync lost handle=%d", param->periodic_adv_sync_lost.sync_handle);
+        pas_periodic_sync = false;
+        break;
+    case ESP_GAP_BLE_PERIODIC_ADV_SYNC_ESTAB_EVT:
+        ESP_LOGI(PAS_TAG, "Sync estab status=%d handle=%d sid=%d interval=%.2f ms phy=%d",
+                 param->periodic_adv_sync_estab.status,
+                 param->periodic_adv_sync_estab.sync_handle,
+                 param->periodic_adv_sync_estab.sid,
+                 param->periodic_adv_sync_estab.period_adv_interval * 1.25f,
+                 param->periodic_adv_sync_estab.adv_phy);
+        pas_validate_config(param->periodic_adv_sync_estab.period_adv_interval);
+        break;
+    case ESP_GAP_BLE_EXT_ADV_REPORT_EVT: {
+        if (pas_periodic_sync) break;
+        uint8_t name_len = 0;
+        uint8_t *adv_name = esp_ble_resolve_adv_data(param->ext_adv_report.params.adv_data,
+                                                     ESP_BLE_AD_TYPE_NAME_CMPL,
+                                                     &name_len);
+        if (adv_name && (memcmp(adv_name, pas_remote_name, name_len) == 0)) {
+            pas_periodic_sync = true;
+            pas_periodic_params.sid = param->ext_adv_report.params.sid;
+            pas_periodic_params.addr_type = (esp_ble_addr_type_t)param->ext_adv_report.params.addr_type;
+            memcpy(pas_periodic_params.addr, param->ext_adv_report.params.addr, sizeof(esp_bd_addr_t));
+            esp_err_t r = esp_ble_gap_periodic_adv_create_sync(&pas_periodic_params);
+            if (r != ESP_OK) {
+                ESP_LOGE(PAS_TAG, "Create sync failed %s", esp_err_to_name(r));
+                pas_periodic_sync = false;
+            } else {
+                ESP_LOGI(PAS_TAG, "Creating periodic sync with %.*s", name_len, (char*)adv_name);
+            }
+        }
+    } break;
+    case ESP_GAP_BLE_PERIODIC_ADV_REPORT_EVT:
+        ESP_LOGD(PAS_TAG, "Periodic adv report len=%d rssi=%d", param->period_adv_report.params.data_length, param->period_adv_report.params.rssi);
+        break;
+    default:
+        break;
+    }
+}
+
+static void periodicAdvSyncDemoInit()
+{
+    // Release classic BT memory to save RAM
+    esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
+    if (!pas_sem) pas_sem = xSemaphoreCreateBinary();
+    esp_err_t ret;
+    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    ret = esp_bt_controller_init(&bt_cfg); if (ret) { ESP_LOGE(PAS_TAG, "controller init failed %s", esp_err_to_name(ret)); return; }
+    ret = esp_bt_controller_enable(ESP_BT_MODE_BLE); if (ret) { ESP_LOGE(PAS_TAG, "controller enable failed %s", esp_err_to_name(ret)); return; }
+    ret = esp_bluedroid_init(); if (ret) { ESP_LOGE(PAS_TAG, "bluedroid init failed %s", esp_err_to_name(ret)); return; }
+    ret = esp_bluedroid_enable(); if (ret) { ESP_LOGE(PAS_TAG, "bluedroid enable failed %s", esp_err_to_name(ret)); return; }
+    ret = esp_ble_gap_register_callback(pas_gap_handler); if (ret) { ESP_LOGE(PAS_TAG, "gap cb reg failed %s", esp_err_to_name(ret)); return; }
+
+    // Start extended scanning
+    esp_ble_gap_set_ext_scan_params(&pas_ext_scan_params);
+    esp_ble_gap_start_ext_scan(0, 0); // continuous
+    ESP_LOGI(PAS_TAG, "Extended scan started (demo mode)");
+}
+
+#endif // USE_PERIODIC_ADV_SYNC_DEMO
 
 void cpuDeepSleep(uint32_t msecToWake)
 {
