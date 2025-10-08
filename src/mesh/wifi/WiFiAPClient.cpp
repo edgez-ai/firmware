@@ -153,9 +153,11 @@ static void onNetworkConnected()
         }
 
 #if defined(ARCH_ESP32) && !MESHTASTIC_EXCLUDE_WEBSERVER
-        if (config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
-            initWebServer();
-        }
+        // Temporarily disabled web server to avoid SSL cert crash
+        // if (config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
+        //     initWebServer();
+        // }
+        LOG_INFO("Web server disabled");
 #endif
 #if !MESHTASTIC_EXCLUDE_SOCKETAPI
         if (config.display.displaymode != meshtastic_Config_DisplayConfig_DisplayMode_COLOR) {
@@ -358,41 +360,56 @@ static void esp32_on_wifi_event(void *arg, esp_event_base_t event_base, int32_t 
 
 bool initWifi()
 {
+    LOG_DEBUG("initWifi() called - checking config");
+    LOG_DEBUG("  wifi_enabled=%d, ssid='%s'", config.network.wifi_enabled, config.network.wifi_ssid);
+    
     if (!(config.network.wifi_enabled && config.network.wifi_ssid[0])) {
-        LOG_INFO("Not using WIFI");
+        LOG_INFO("Not using WIFI (enabled=%d, ssid='%s')", config.network.wifi_enabled, config.network.wifi_ssid);
         return false;
     }
 
+    LOG_INFO("Initializing native ESP-IDF WiFi...");
+    
     // Assume Arduino core already initialized NVS; skip manual init
 
+    LOG_DEBUG("Calling esp_netif_init()");
     esp_err_t err = esp_netif_init();
     if (err != ESP_OK) {
         LOG_ERROR("esp_netif_init failed %d", err);
         return false;
     }
+    LOG_DEBUG("esp_netif_init OK");
+    
     static bool loopCreated = false;
     if (!loopCreated) {
+        LOG_DEBUG("Creating event loop");
         err = esp_event_loop_create_default();
         if (err != ESP_ERR_INVALID_STATE && err != ESP_OK) {
             LOG_ERROR("event loop create failed %d", err);
             return false;
         }
+        LOG_DEBUG("Event loop created/already exists");
         loopCreated = true;
     }
     if (!s_sta_netif) {
+        LOG_DEBUG("Creating WiFi STA netif");
         s_sta_netif = esp_netif_create_default_wifi_sta();
     }
 
+    LOG_DEBUG("Initializing WiFi driver");
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     err = esp_wifi_init(&cfg);
     if (err != ESP_OK) {
         LOG_ERROR("esp_wifi_init failed %d", err);
         return false;
     }
+    LOG_DEBUG("WiFi driver initialized");
 
+    LOG_DEBUG("Registering event handlers");
     esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &esp32_on_wifi_event, NULL, NULL);
     esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &esp32_on_got_ip, NULL, NULL);
 
+    LOG_DEBUG("Configuring WiFi credentials (SSID: %s)", config.network.wifi_ssid);
     wifi_config_t wifi_config = {};
     strncpy((char *)wifi_config.sta.ssid, config.network.wifi_ssid, sizeof(wifi_config.sta.ssid));
     strncpy((char *)wifi_config.sta.password, config.network.wifi_psk, sizeof(wifi_config.sta.password));
@@ -400,27 +417,35 @@ bool initWifi()
     wifi_config.sta.pmf_cfg.capable = true;
     wifi_config.sta.pmf_cfg.required = false;
 
+    LOG_DEBUG("Setting WiFi mode to STA");
     err = esp_wifi_set_mode(WIFI_MODE_STA);
     if (err != ESP_OK) {
         LOG_ERROR("esp_wifi_set_mode failed %d", err);
         return false;
     }
+    LOG_DEBUG("Setting WiFi config");
     err = esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     if (err != ESP_OK) {
         LOG_ERROR("esp_wifi_set_config failed %d", err);
         return false;
     }
+    LOG_DEBUG("Disabling power save mode");
     // Disable power save for performance parity with previous code
     esp_wifi_set_ps(WIFI_PS_NONE);
 
+    LOG_DEBUG("Starting WiFi driver");
     err = esp_wifi_start();
     if (err != ESP_OK) {
         LOG_ERROR("esp_wifi_start failed %d", err);
         return false;
     }
 
-    LOG_INFO("WiFi STA start, connecting to %s", config.network.wifi_ssid);
-    esp_wifi_connect();
+    LOG_INFO("WiFi STA started successfully, connecting to '%s'...", config.network.wifi_ssid);
+    LOG_DEBUG("Calling esp_wifi_connect()");
+    err = esp_wifi_connect();
+    if (err != ESP_OK) {
+        LOG_WARN("esp_wifi_connect returned %d (may retry)", err);
+    }
     return true; // We'll get events asynchronously
 }
 
