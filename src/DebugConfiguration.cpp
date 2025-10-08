@@ -26,6 +26,17 @@ SOFTWARE.*/
 
 #include "DebugConfiguration.h"
 
+#if HAS_NETWORKING && defined(ESP_PLATFORM)
+#include <arpa/inet.h>
+#include <cerrno>
+#include <cstring>
+#include <esp_timer.h>
+#include <lwip/ip_addr.h>
+#include <lwip/netdb.h>
+#include <lwip/sockets.h>
+#include <unistd.h>
+#endif
+
 #ifdef ARCH_PORTDUINO
 #include "platform/portduino/PortduinoGlue.h"
 #endif
@@ -41,6 +52,189 @@ extern "C" void logLegacy(const char *level, const char *fmt, ...)
 }
 
 #if HAS_NETWORKING
+
+#if defined(ESP_PLATFORM)
+
+Syslog::Syslog()
+    : _socket(-1), _enabled(false), _resolved(false), _port(0), _priDefault(LOGLEVEL_KERN), _priMask(0xff)
+{
+    ip4_addr_set_zero(&_ip);
+    _deviceHostname = SYSLOG_NILVALUE;
+    _appName = SYSLOG_NILVALUE;
+}
+
+Syslog &Syslog::server(const char *server, uint16_t port)
+{
+    _server = server ? server : "";
+    _port = port;
+    _resolved = false;
+    return *this;
+}
+
+Syslog &Syslog::deviceHostname(const char *deviceHostname)
+{
+    _deviceHostname = deviceHostname ? deviceHostname : SYSLOG_NILVALUE;
+    return *this;
+}
+
+Syslog &Syslog::appName(const char *appName)
+{
+    _appName = appName ? appName : SYSLOG_NILVALUE;
+    return *this;
+}
+
+Syslog &Syslog::defaultPriority(uint16_t pri)
+{
+    _priDefault = pri;
+    return *this;
+}
+
+Syslog &Syslog::logMask(uint8_t priMask)
+{
+    _priMask = priMask;
+    return *this;
+}
+
+void Syslog::enable()
+{
+    if (_enabled)
+        return;
+
+    if (_socket >= 0) {
+        close(_socket);
+        _socket = -1;
+    }
+
+    _socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+    if (_socket < 0) {
+        LOG_ERROR("Syslog socket create failed (%d)", errno);
+        return;
+    }
+
+    _enabled = true;
+}
+
+void Syslog::disable()
+{
+    if (_socket >= 0) {
+        close(_socket);
+        _socket = -1;
+    }
+    _enabled = false;
+}
+
+bool Syslog::isEnabled() const
+{
+    return _enabled;
+}
+
+bool Syslog::vlogf(uint16_t pri, const char *fmt, va_list args)
+{
+    const char *app = _appName.empty() ? SYSLOG_NILVALUE : _appName.c_str();
+    return this->vlogf(pri, app, fmt, args);
+}
+
+bool Syslog::vlogf(uint16_t pri, const char *appName, const char *fmt, va_list args)
+{
+    size_t initialLen = strlen(fmt);
+    char *message = new char[initialLen + 1];
+    size_t len = vsnprintf(message, initialLen + 1, fmt, args);
+    if (len > initialLen) {
+        delete[] message;
+        message = new char[len + 1];
+        vsnprintf(message, len + 1, fmt, args);
+    }
+
+    bool result = sendLog(pri, appName, message);
+
+    delete[] message;
+    return result;
+}
+
+bool Syslog::resolve()
+{
+    if (_resolved)
+        return true;
+
+    if (_port == 0 || _server.empty())
+        return false;
+
+    ip_addr_t addr;
+    if (ipaddr_aton(_server.c_str(), &addr)) {
+        ip4_addr_copy(_ip, addr.u_addr.ip4);
+        _resolved = true;
+        return true;
+    }
+
+    struct addrinfo hints = {};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+
+    struct addrinfo *res = nullptr;
+    int ret = getaddrinfo(_server.c_str(), nullptr, &hints, &res);
+    if (ret != 0 || res == nullptr) {
+        LOG_WARN("Syslog DNS lookup failed for %s (%d)", _server.c_str(), ret);
+        if (res)
+            freeaddrinfo(res);
+        return false;
+    }
+
+    auto *addr_in = reinterpret_cast<struct sockaddr_in *>(res->ai_addr);
+    ip4_addr_set_u32(&_ip, addr_in->sin_addr.s_addr);
+    freeaddrinfo(res);
+    _resolved = true;
+    return true;
+}
+
+bool Syslog::sendLog(uint16_t pri, const char *appName, const char *message)
+{
+    if (!_enabled || _socket < 0)
+        return false;
+
+    if (_port == 0)
+        return false;
+
+    if ((LOG_MASK(LOG_PRI(pri)) & _priMask) == 0)
+        return true;
+
+    if ((pri & LOG_FACMASK) == 0)
+        pri = LOG_MAKEPRI(LOG_FAC(_priDefault), pri);
+
+    if (!resolve())
+        return false;
+
+    const char *hostname = _deviceHostname.empty() ? SYSLOG_NILVALUE : _deviceHostname.c_str();
+    const char *app = (appName && *appName) ? appName : (_appName.empty() ? SYSLOG_NILVALUE : _appName.c_str());
+
+    std::string payload;
+    payload.reserve(strlen(message) + 96);
+    payload.push_back('<');
+    payload.append(std::to_string(pri));
+    payload.append(">1 - ");
+    payload.append(hostname);
+    payload.push_back(' ');
+    payload.append(app);
+    payload.append(" - - - ");
+    payload.append("\xEF\xBB\xBF");
+    payload.push_back('[');
+    payload.append(std::to_string(esp_timer_get_time() / 1000000ULL));
+    payload.append("]: ");
+    payload.append(message);
+
+    struct sockaddr_in dest = {};
+    dest.sin_family = AF_INET;
+    dest.sin_port = htons(_port);
+    dest.sin_addr.s_addr = _ip.addr;
+
+    ssize_t sent = sendto(_socket, payload.data(), payload.size(), 0, reinterpret_cast<struct sockaddr *>(&dest), sizeof(dest));
+    if (sent < 0) {
+        LOG_WARN("Syslog send failed (%d)", errno);
+        return false;
+    }
+    return static_cast<size_t>(sent) == payload.size();
+}
+
+#else
 
 Syslog::Syslog(UDP &client)
 {
@@ -195,4 +389,6 @@ inline bool Syslog::_sendLog(uint16_t pri, const char *appName, const char *mess
     return true;
 }
 
-#endif
+#endif // ESP_PLATFORM
+
+#endif // HAS_NETWORKING

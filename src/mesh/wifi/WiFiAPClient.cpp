@@ -10,36 +10,48 @@
 #include "mesh/api/WiFiServerAPI.h"
 #include "target_specific.h"
 
+#include <string>
+
+#if !defined(ESP_PLATFORM)
+#include <Arduino.h>
+#endif
+
 #if defined(ESP_PLATFORM)
 // Use native ESP-IDF (no Arduino WiFi layer)
 #include <esp_event.h>
 #include <esp_mac.h>
-#include <esp_wifi.h>
 #include <esp_netif.h>
 #include <esp_system.h>
-#include <nvs_flash.h>
+#include <esp_timer.h>
+#include <esp_wifi.h>
+#include <esp_sntp.h>
 #include <lwip/err.h>
+#include <lwip/netdb.h>
+#include <lwip/sockets.h>
 #include <lwip/sys.h>
+#include <mdns.h>
+#include <nvs_flash.h>
 #include <string.h>
 #else
 #include <WiFi.h>
+#include <WiFiUdp.h>
+#if defined(ARCH_ESP32)
+#include <ESPmDNS.h>
+#elif defined(ARCH_RP2040)
+#include <SimpleMDNS.h>
 #endif
+#endif // defined(ESP_PLATFORM)
 
 #if HAS_ETHERNET && defined(USE_WS5500)
 #include <ETHClass2.h>
 #define ETH ETH2
 #endif // HAS_ETHERNET
 
-#include <WiFiUdp.h>
-#if defined(ESP_PLATFORM)
-#include <ESPmDNS.h> // We still leverage Arduino mDNS component if available; otherwise replace later.
-#elif defined(ARCH_RP2040)
-#include <SimpleMDNS.h>
-#endif
-
 #ifndef DISABLE_NTP
 #include "Throttle.h"
+#if !defined(ESP_PLATFORM)
 #include <NTPClient.h>
+#endif
 #endif
 
 using namespace concurrency;
@@ -47,10 +59,14 @@ using namespace concurrency;
 void startLwM2MClient();
 
 // NTP
+#if !defined(ESP_PLATFORM)
 WiFiUDP ntpUDP;
+#endif
 
 #ifndef DISABLE_NTP
+#if !defined(ESP_PLATFORM)
 NTPClient timeClient(ntpUDP, config.network.ntp_server);
+#endif
 #endif
 
 uint8_t wifiDisconnectReason = 0;
@@ -65,13 +81,117 @@ static esp_netif_t *s_sta_netif = nullptr;
 // Externs expected by other modules but not used in native ESP32 path
 bool needReconnect = false;
 concurrency::Periodic *wifiReconnect = nullptr;
+
+static bool s_mdns_started = false;
+#ifndef DISABLE_NTP
+static bool s_sntp_started = false;
+#endif
 #endif
 
 bool APStartupComplete = 0;
+#if !defined(ESP_PLATFORM)
 unsigned long lastrun_ntp = 0;
+#endif
 
+#if defined(ESP_PLATFORM)
+Syslog syslog;
+#else
 WiFiUDP syslogClient;
 Syslog syslog(syslogClient);
+#endif
+
+#if defined(ESP_PLATFORM)
+
+namespace
+{
+
+bool startMdnsService()
+{
+    if (s_mdns_started) {
+        mdns_free();
+        s_mdns_started = false;
+    }
+
+    esp_err_t err = mdns_init();
+    if (err == ESP_ERR_INVALID_STATE) {
+        // Already initialised from a previous run; consider this success but refresh state.
+        mdns_free();
+        err = mdns_init();
+    }
+
+    if (err != ESP_OK) {
+        LOG_ERROR("mDNS init failed (%d)", err);
+        return false;
+    }
+
+    mdns_hostname_set("Meshtastic");
+    mdns_instance_name_set("Meshtastic");
+
+    err = mdns_service_add("Meshtastic", "_meshtastic", "_tcp", SERVER_API_DEFAULT_PORT, NULL, 0);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        LOG_WARN("mDNS service add failed (%d)", err);
+    }
+
+    mdns_service_txt_item_set("_meshtastic", "_tcp", "shortname", owner.short_name);
+    mdns_service_txt_item_set("_meshtastic", "_tcp", "id", owner.id);
+
+    s_mdns_started = true;
+    LOG_INFO("mDNS Host: Meshtastic.local");
+    return true;
+}
+
+void stopMdnsService()
+{
+    if (s_mdns_started) {
+        mdns_free();
+        s_mdns_started = false;
+    }
+}
+
+#ifndef DISABLE_NTP
+void sntpSyncCallback(struct timeval *tv)
+{
+    if (tv) {
+        perhapsSetRTC(RTCQualityNTP, tv);
+    }
+}
+
+void startSntpClient()
+{
+    if (!config.network.ntp_server[0]) {
+        LOG_WARN("NTP server not configured; skipping SNTP start");
+        return;
+    }
+
+    LOG_INFO("Start NTP time client");
+    sntp_stop();
+    sntp_setoperatingmode(SNTP_OPMODE_POLL);
+#ifdef SNTP_SYNC_MODE_IMMED
+    sntp_set_sync_mode(SNTP_SYNC_MODE_IMMED);
+#endif
+#ifdef sntp_set_time_sync_notification_cb
+    sntp_set_time_sync_notification_cb(sntpSyncCallback);
+#endif
+#ifdef sntp_set_sync_interval
+    sntp_set_sync_interval(60UL * 60UL * 1000UL); // once an hour
+#endif
+    sntp_setservername(0, config.network.ntp_server);
+    sntp_init();
+    s_sntp_started = true;
+}
+
+void stopSntpClient()
+{
+    if (s_sntp_started) {
+        sntp_stop();
+        s_sntp_started = false;
+    }
+}
+#endif // DISABLE_NTP
+
+} // namespace
+
+#endif // ESP_PLATFORM
 
 #if defined(ARCH_RP2040)
 // RP2040 Arduino-style WiFi variables
@@ -105,28 +225,40 @@ static void onNetworkConnected()
         // Start web server
         LOG_INFO("Start network services");
 
-        // start mdns
-        if (!MDNS.begin("Meshtastic")) {
-            LOG_ERROR("Error setting up mDNS responder!");
-        } else {
-            LOG_INFO("mDNS Host: Meshtastic.local");
-            MDNS.addService("meshtastic", "tcp", SERVER_API_DEFAULT_PORT);
-// ESPmDNS (ESP32) and SimpleMDNS (RP2040) have slightly different APIs for adding TXT records
-#ifdef ARCH_ESP32
-            MDNS.addServiceTxt("meshtastic", "tcp", "shortname", String(owner.short_name));
-            MDNS.addServiceTxt("meshtastic", "tcp", "id", String(owner.id));
-            // ESP32 prints obtained IP address in WiFiEvent
+    // start mdns
+#if defined(ESP_PLATFORM)
+    if (!startMdnsService()) {
+        LOG_ERROR("Error setting up mDNS responder!");
+    }
 #elif defined(ARCH_RP2040)
-            MDNS.addServiceTxt("meshtastic", "shortname", owner.short_name);
-            MDNS.addServiceTxt("meshtastic", "id", owner.id);
-            LOG_INFO("Obtained IP address: %s", WiFi.localIP().toString().c_str());
+    if (!MDNS.begin("Meshtastic")) {
+        LOG_ERROR("Error setting up mDNS responder!");
+    } else {
+        LOG_INFO("mDNS Host: Meshtastic.local");
+        MDNS.addService("meshtastic", "tcp", SERVER_API_DEFAULT_PORT);
+        MDNS.addServiceTxt("meshtastic", "shortname", owner.short_name);
+        MDNS.addServiceTxt("meshtastic", "id", owner.id);
+        LOG_INFO("Obtained IP address: %s", WiFi.localIP().toString().c_str());
+    }
+#else
+    if (!MDNS.begin("Meshtastic")) {
+        LOG_ERROR("Error setting up mDNS responder!");
+    } else {
+        LOG_INFO("mDNS Host: Meshtastic.local");
+        MDNS.addService("meshtastic", "tcp", SERVER_API_DEFAULT_PORT);
+        MDNS.addServiceTxt("meshtastic", "tcp", "shortname", String(owner.short_name));
+        MDNS.addServiceTxt("meshtastic", "tcp", "id", String(owner.id));
+    }
 #endif
-        }
 
 #ifndef DISABLE_NTP
-        LOG_INFO("Start NTP time client");
-        timeClient.begin();
-        timeClient.setUpdateInterval(60 * 60); // Update once an hour
+#if defined(ESP_PLATFORM)
+    startSntpClient();
+#else
+    LOG_INFO("Start NTP time client");
+    timeClient.begin();
+    timeClient.setUpdateInterval(60 * 60); // Update once an hour
+#endif
 #endif
 
         if (config.network.rsyslog_server[0]) {
@@ -134,12 +266,16 @@ static void onNetworkConnected()
             // Defaults
             int serverPort = 514;
             const char *serverAddr = config.network.rsyslog_server;
-            String server = String(serverAddr);
-            int delimIndex = server.indexOf(':');
-            if (delimIndex > 0) {
-                String port = server.substring(delimIndex + 1, server.length());
-                server[delimIndex] = 0;
-                serverPort = port.toInt();
+            std::string server(serverAddr);
+            auto delimIndex = server.find(':');
+            if (delimIndex != std::string::npos) {
+                std::string port = server.substr(delimIndex + 1);
+                server.resize(delimIndex);
+                try {
+                    serverPort = std::stoi(port);
+                } catch (...) {
+                    LOG_WARN("Invalid syslog port '%s', defaulting to %d", port.c_str(), serverPort);
+                }
                 serverAddr = server.c_str();
             }
             syslog.server(serverAddr, serverPort);
@@ -449,6 +585,11 @@ bool initWifi()
 void deinitWifi()
 {
     LOG_INFO("WiFi deinit");
+    syslog.disable();
+    stopMdnsService();
+#ifndef DISABLE_NTP
+    stopSntpClient();
+#endif
     esp_wifi_stop();
     esp_wifi_deinit();
 }

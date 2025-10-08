@@ -2,7 +2,6 @@
 
 #include "concurrency/Periodic.h"
 #include "configuration.h"
-#include <Arduino.h>
 #include <functional>
 
 #if HAS_WIFI && !defined(ARCH_PORTDUINO) && !defined(ARCH_ESP32)

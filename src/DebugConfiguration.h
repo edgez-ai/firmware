@@ -162,6 +162,49 @@ extern "C" void logLegacy(const char *level, const char *fmt, ...);
 
 #if HAS_NETWORKING
 
+#include <cstdarg>
+
+#if defined(ESP_PLATFORM)
+#include <lwip/ip4_addr.h>
+#include <string>
+
+class Syslog
+{
+  private:
+    int _socket;
+    bool _enabled;
+    bool _resolved;
+    ip4_addr_t _ip;
+    std::string _server;
+    std::string _deviceHostname;
+    std::string _appName;
+    uint16_t _port;
+    uint16_t _priDefault;
+    uint8_t _priMask;
+
+    bool resolve();
+    bool sendLog(uint16_t pri, const char *appName, const char *message);
+
+  public:
+    Syslog();
+
+    Syslog &server(const char *server, uint16_t port);
+    Syslog &deviceHostname(const char *deviceHostname);
+    Syslog &appName(const char *appName);
+    Syslog &defaultPriority(uint16_t pri = LOGLEVEL_KERN);
+    Syslog &logMask(uint8_t priMask);
+
+    void enable();
+    void disable();
+    bool isEnabled() const;
+
+    bool vlogf(uint16_t pri, const char *fmt, va_list args) __attribute__((format(printf, 3, 0)));
+    bool vlogf(uint16_t pri, const char *appName, const char *fmt, va_list args) __attribute__((format(printf, 3, 0)));
+};
+
+#else
+#include <WiFi.h>
+
 class Syslog
 {
   private:
@@ -174,6 +217,7 @@ class Syslog
     uint16_t _priDefault;
     uint8_t _priMask = 0xff;
     bool _enabled = false;
+    String _serverStorage;
 
     bool _sendLog(uint16_t pri, const char *appName, const char *message);
 
@@ -194,5 +238,7 @@ class Syslog
     bool vlogf(uint16_t pri, const char *fmt, va_list args) __attribute__((format(printf, 3, 0)));
     bool vlogf(uint16_t pri, const char *appName, const char *fmt, va_list args) __attribute__((format(printf, 3, 0)));
 };
+
+#endif // ESP_PLATFORM
 
 #endif // HAS_NETWORKING
