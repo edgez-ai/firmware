@@ -311,6 +311,8 @@ static void pas_gap_handler(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t
     default:
         break;
     }
+
+    esp_task_wdt_reset();
 }
 
 static void periodicAdvSyncDemoInit()
